@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# Environment and secrets
+.env
+auth.json
+
+# Local runtime directories
+repos/
+reviews/
+*.tmp
+automation_state.json
+config.json
+
+# IDEs and OS
+.DS_Store
+.idea/
+.vscode/
+*.swp

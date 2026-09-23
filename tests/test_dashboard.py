@@ -1,0 +1,175 @@
+import os
+import shutil
+import tempfile
+import unittest
+import json
+from unittest.mock import MagicMock
+
+from config_manager import ConfigManager
+from state_manager import StateManager
+from github_client import GitHubClient
+from web_dashboard import DashboardBackend
+
+class TestDashboardBackend(unittest.TestCase):
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp()
+        self.config_path = os.path.join(self.test_dir, "config.json")
+        self.state_path = os.path.join(self.test_dir, "automation_state.json")
+        self.repos_dir = os.path.join(self.test_dir, "repos")
+
+        self.cfg_mgr = ConfigManager(config_path=self.config_path, repos_base_dir=self.repos_dir)
+        self.cfg_mgr.save_config({
+            "repositories": [
+                {"full_name": "owner/repo1", "enabled": True, "path": os.path.join(self.repos_dir, "owner/repo1")},
+                {"full_name": "owner/repo2", "enabled": False, "path": os.path.join(self.repos_dir, "owner/repo2")}
+            ],
+            "poll_interval_seconds": 900,
+            "max_files_limit": 100,
+            "auto_approve": True,
+            "service_enabled": True
+        })
+
+        self.state_mgr = StateManager(state_path=self.state_path)
+        self.gh_client = MagicMock(spec=GitHubClient)
+        self.gh_client.get_username.return_value = "my-test-bot"
+
+        # Mock list_open_prs
+        self.gh_client.list_open_prs.return_value = [
+            {
+                "number": 101,
+                "title": "Add awesome feature",
+                "user": {"login": "contributor_jane"},
+                "base": {"ref": "main"},
+                "head": {"ref": "feature-awesome", "sha": "abcdef1234567890"},
+                "html_url": "https://github.com/owner/repo1/pull/101",
+                "created_at": "2026-09-23T10:00:00Z",
+                "updated_at": "2026-09-23T10:05:00Z"
+            }
+        ]
+        self.gh_client.has_user_reviewed_sha.return_value = (False, None)
+
+        self.backend = DashboardBackend(
+            config_manager=self.cfg_mgr,
+            state_manager=self.state_mgr,
+            github_client=self.gh_client,
+            auto_start_worker=False
+        )
+
+    def tearDown(self):
+        self.backend._is_running = False
+        self.backend._executor.shutdown(wait=False)
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def test_annotated_status_overlay(self):
+        self.backend.refresh_pr_cache()
+        status = self.backend.get_annotated_status()
+
+        self.assertTrue(status["service_enabled"])
+        self.assertEqual(len(status["repositories"]), 2)
+        self.assertEqual(len(status["pull_requests"]), 1)
+
+        pr = status["pull_requests"][0]
+        self.assertEqual(pr["pr_key"], "owner/repo1#101")
+        self.assertEqual(pr["author"], "contributor_jane")
+        self.assertFalse(pr["is_own_pr"])
+        self.assertEqual(pr["status_badge"], "PENDING_REVIEW")
+
+    def test_status_badge_with_active_rate_limit(self):
+        self.backend.refresh_pr_cache()
+        pr_key = "owner/repo1#101"
+
+        # Record a rate limit
+        self.state_mgr.record_rate_limit(600, reason="Quota limit reached", pr_key=pr_key)
+        self.state_mgr.record_pr_status(pr_key, {"status": "RATE_LIMITED", "attempt": 1})
+
+        status = self.backend.get_annotated_status()
+        self.assertTrue(status["rate_limited"])
+        self.assertGreater(status["rate_limit_remaining_seconds"], 500)
+
+        pr = status["pull_requests"][0]
+        self.assertEqual(pr["status_badge"], "RATE_LIMITED")
+        self.assertIn("Retrying in", pr["status_label"])
+
+    def test_status_badge_approved_by_you(self):
+        self.backend.refresh_pr_cache()
+        pr_key = "owner/repo1#101"
+
+        self.state_mgr.record_pr_status(pr_key, {
+            "status": "COMPLETED",
+            "review_outcome": "APPROVED",
+            "report_file": "owner_repo1_pr101_abcdef.html"
+        })
+
+        status = self.backend.get_annotated_status()
+        pr = status["pull_requests"][0]
+        self.assertEqual(pr["status_badge"], "APPROVED")
+        self.assertEqual(pr["status_label"], "Approved by You")
+        self.assertEqual(pr["report_file"], "owner_repo1_pr101_abcdef.html")
+
+    def test_status_badge_own_pr(self):
+        # Configure PR where author is the bot
+        self.gh_client.list_open_prs.return_value = [
+            {
+                "number": 102,
+                "title": "Bot maintenance PR",
+                "user": {"login": "my-test-bot"}, # Matches authenticated user
+                "base": {"ref": "main"},
+                "head": {"ref": "maint", "sha": "99998888"},
+                "html_url": "https://github.com/owner/repo1/pull/102",
+                "created_at": "2026-09-23T11:00:00Z",
+                "updated_at": "2026-09-23T11:05:00Z"
+            }
+        ]
+        self.backend.refresh_pr_cache()
+        status = self.backend.get_annotated_status()
+        pr = status["pull_requests"][0]
+        self.assertTrue(pr["is_own_pr"])
+        self.assertEqual(pr["status_badge"], "OWN_PR")
+        self.assertEqual(pr["status_label"], "Your PR (Author)")
+
+    def test_http_endpoints(self):
+        import web_dashboard
+        import urllib.request
+        from http.server import HTTPServer
+
+        web_dashboard.backend = self.backend
+        server = HTTPServer(("127.0.0.1", 0), web_dashboard.DashboardRequestHandler)
+        port = server.server_port
+
+        import threading
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+
+        base_url = f"http://127.0.0.1:{port}"
+
+        # 1. Test GET /
+        with urllib.request.urlopen(f"{base_url}/") as resp:
+            self.assertEqual(resp.status, 200)
+            self.assertIn(b"CodeRabbit PR Auto-Reviewer", resp.read())
+
+        # 2. Test GET /api/status
+        with urllib.request.urlopen(f"{base_url}/api/status") as resp:
+            self.assertEqual(resp.status, 200)
+            data = json.loads(resp.read().decode())
+            self.assertIn("pull_requests", data)
+            self.assertIn("rate_limited", data)
+
+        # 3. Test GET /api/repos
+        with urllib.request.urlopen(f"{base_url}/api/repos") as resp:
+            self.assertEqual(resp.status, 200)
+            repos = json.loads(resp.read().decode())
+            self.assertEqual(len(repos), 2)
+
+        # 4. Test POST /api/clear-rate-limit
+        req = urllib.request.Request(f"{base_url}/api/clear-rate-limit", data=b"{}", method="POST")
+        with urllib.request.urlopen(req) as resp:
+            self.assertEqual(resp.status, 200)
+            res = json.loads(resp.read().decode())
+            self.assertEqual(res["status"], "cleared")
+
+        server.shutdown()
+        server.server_close()
+
+if __name__ == "__main__":
+    unittest.main()
+

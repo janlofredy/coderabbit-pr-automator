@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CodeRabbit PR Auto-Reviewer</title>
+    <link rel="icon" href="https://raw.githubusercontent.com/coderabbitai/.github/main/profile/coderabbit-logo.png" type="image/png">
+    <style>
+        :root {
+            --bg-color: #0b0f19;
+            --surface-color: #111827;
+            --surface-hover: #1f2937;
+            --border-color: #374151;
+            --text-main: #f9fafb;
+            --text-muted: #9ca3af;
+            --primary: #6366f1;
+            --primary-hover: #4f46e5;
+            --green: #10b981;
+            --yellow: #f59e0b;
+            --orange: #f97316;
+            --red: #ef4444;
+            --blue: #3b82f6;
+            --purple: #8b5cf6;
+            --gray: #6b7280;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        header {
+            background-color: var(--surface-color);
+            border-bottom: 1px solid var(--border-color);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky;
+            top: 0;
+            z-index: 50;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-size: 1.25rem;
+            font-weight: 700;
+        }
+
+        .brand-icon {
+            font-size: 1.75rem;
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .btn {
+            background-color: var(--surface-hover);
+            color: var(--text-main);
+            border: 1px solid var(--border-color);
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            font-size: 0.875rem;
+            font-weight: 600;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            transition: all 0.15s ease-in-out;
+            text-decoration: none;
+        }
+
+        .btn:hover {
+            background-color: var(--border-color);
+        }
+
+        .btn-primary {
+            background-color: var(--primary);
+            border-color: var(--primary);
+            color: #ffffff;
+        }
+
+        .btn-primary:hover {
+            background-color: var(--primary-hover);
+            border-color: var(--primary-hover);
+        }
+
+        .btn-success { background-color: #065f46; border-color: var(--green); color: #ecfdf5; }
+        .btn-warning { background-color: #78350f; border-color: var(--yellow); color: #fffbeb; }
+        .btn-danger { background-color: #7f1d1d; border-color: var(--red); color: #fef2f2; }
+        .btn-sm { padding: 0.25rem 0.6rem; font-size: 0.75rem; border-radius: 4px; }
+
+        .banner-rate-limit {
+            background: linear-gradient(90deg, #7c2d12, #9a3412);
+            border-bottom: 1px solid var(--orange);
+            color: #ffedd5;
+            padding: 0.75rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.95rem;
+            font-weight: 500;
+        }
+
+        .banner-rate-limit.hidden { display: none; }
+
+        main {
+            flex: 1;
+            padding: 2rem;
+            max-width: 1400px;
+            margin: 0 auto;
+            width: 100%;
+        }
+
+        .stats-bar {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 1.25rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background-color: var(--surface-color);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1.25rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .stat-title {
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .stat-value {
+            font-size: 1.75rem;
+            font-weight: 700;
+        }
+
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .section-title {
+            font-size: 1.25rem;
+            font-weight: 700;
+        }
+
+        .pr-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+            gap: 1.25rem;
+            margin-bottom: 2.5rem;
+        }
+
+        .pr-card {
+            background-color: var(--surface-color);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1.25rem;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            transition: transform 0.15s, border-color 0.15s;
+        }
+
+        .pr-card:hover {
+            border-color: #4b5563;
+            transform: translateY(-2px);
+        }
+
+        .pr-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 0.75rem;
+            gap: 0.5rem;
+        }
+
+        .repo-badge {
+            font-family: monospace;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            padding: 0.3rem 0.65rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.025em;
+            white-space: nowrap;
+        }
+
+        .badge-orange { background-color: rgba(249, 115, 22, 0.15); color: #fb923c; border: 1px solid #f97316; }
+        .badge-blue { background-color: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid #3b82f6; }
+        .badge-green { background-color: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid #10b981; }
+        .badge-yellow { background-color: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid #f59e0b; }
+        .badge-red { background-color: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid #ef4444; }
+        .badge-purple { background-color: rgba(139, 92, 246, 0.15); color: #a78bfa; border: 1px solid #8b5cf6; }
+        .badge-gray { background-color: rgba(107, 114, 128, 0.15); color: #9ca3af; border: 1px solid #6b7280; }
+
+        .pr-title {
+            font-size: 1.05rem;
+            font-weight: 600;
+            margin-bottom: 0.75rem;
+            line-height: 1.4;
+            color: var(--text-main);
+            text-decoration: none;
+        }
+
+        .pr-title:hover {
+            color: var(--primary);
+        }
+
+        .pr-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-bottom: 1.25rem;
+            padding-bottom: 0.75rem;
+            border-bottom: 1px solid #1f2937;
+        }
+
+        .pr-actions {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 0.5rem;
+            margin-top: auto;
+        }
+
+        /* Modal Styles */
+        .modal-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.75);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s;
+        }
+
+        .modal-overlay.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .modal {
+            background-color: var(--surface-color);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            width: 90%;
+            max-width: 650px;
+            max-height: 85vh;
+            overflow-y: auto;
+            padding: 1.75rem;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.25rem;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 0.75rem;
+        }
+
+        .repo-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem 1rem;
+            background: #1a2234;
+            border-radius: 6px;
+            margin-bottom: 0.5rem;
+        }
+
+        .form-group {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 1.5rem;
+        }
+
+        .form-input {
+            flex: 1;
+            background: #1f2937;
+            border: 1px solid var(--border-color);
+            color: var(--text-main);
+            padding: 0.6rem 1rem;
+            border-radius: 6px;
+            font-size: 0.9rem;
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 4rem 2rem;
+            color: var(--text-muted);
+            background: var(--surface-color);
+            border-radius: 8px;
+            border: 1px dashed var(--border-color);
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="brand">
+            <span class="brand-icon">🐰</span>
+            <span>CodeRabbit Auto-Reviewer</span>
+        </div>
+        <div class="header-actions">
+            <span id="service-status-pill" class="badge badge-green">RUNNING</span>
+            <button id="btn-toggle-service" class="btn btn-sm" onclick="toggleService()">Pause Service</button>
+            <button class="btn btn-sm" onclick="openRepoModal()">⚙️ Manage Repos</button>
+            <button class="btn btn-primary btn-sm" onclick="triggerScan(false)">▶ Run Scan Now</button>
+            <button class="btn btn-sm" onclick="fetchStatus()">🔄 Refresh</button>
+        </div>
+    </header>
+
+    <div id="rate-limit-banner" class="banner-rate-limit hidden">
+        <div>
+            <strong>⏳ CodeRabbit Rate Limit Cooldown Active:</strong>
+            <span id="rate-limit-timer-text">Retrying in ...</span>
+            <span id="rate-limit-reason-text" style="opacity: 0.85; margin-left: 0.5rem; font-size: 0.85rem;"></span>
+        </div>
+        <button class="btn btn-sm btn-danger" onclick="clearRateLimit()">Bypass / Clear Cooldown</button>
+    </div>
+
+    <main>
+        <div class="stats-bar">
+            <div class="stat-card">
+                <span class="stat-title">Active Repositories</span>
+                <span id="stat-repos" class="stat-value">0</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-title">Monitored Open PRs</span>
+                <span id="stat-prs" class="stat-value">0</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-title">Auto-Approved PRs</span>
+                <span id="stat-approved" class="stat-value">0</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-title">Last Background Scan</span>
+                <span id="stat-last-run" class="stat-value" style="font-size: 1.1rem; line-height: 2rem;">Never</span>
+            </div>
+        </div>
+
+        <div class="section-header">
+            <h2 class="section-title">Open Pull Requests</h2>
+            <div style="font-size: 0.85rem; color: var(--text-muted);">Auto-refreshes every 5s</div>
+        </div>
+
+        <div id="pr-container" class="pr-grid">
+            <div class="empty-state" style="grid-column: 1 / -1;">
+                <h3>Loading Pull Requests...</h3>
+                <p>Fetching active repositories and scanning PR states.</p>
+            </div>
+        </div>
+    </main>
+
+    <!-- Manage Repositories Modal -->
+    <div id="repo-modal" class="modal-overlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Manage GitHub Repositories</h3>
+                <button class="btn btn-sm" onclick="closeRepoModal()">✕</button>
+            </div>
+            <div id="repo-list">
+                <!-- Dynamically loaded list of repos -->
+            </div>
+            <div class="form-group">
+                <input type="text" id="new-repo-name" class="form-input" placeholder="owner/repository (e.g. facebook/react)">
+                <button class="btn btn-primary" onclick="addRepo()">Add Repo</button>
+            </div>
+            <div id="repo-modal-msg" style="margin-top: 0.75rem; font-size: 0.85rem;"></div>
+        </div>
+    </div>
+
+    <script>
+        let currentStatus = null;
+        let rateLimitExpiresAt = 0;
+        let countdownTimer = null;
+
+        async function fetchStatus() {
+            try {
+                const res = await fetch('/api/status');
+                const data = await res.json();
+                currentStatus = data;
+                renderDashboard(data);
+            } catch (err) {
+                console.error("Failed to load status:", err);
+            }
+        }
+
+        function renderDashboard(data) {
+            // Service Status
+            const pill = document.getElementById('service-status-pill');
+            const toggleBtn = document.getElementById('btn-toggle-service');
+            if (data.service_enabled) {
+                pill.className = "badge badge-green";
+                pill.textContent = "RUNNING";
+                toggleBtn.textContent = "Pause Service";
+            } else {
+                pill.className = "badge badge-gray";
+                pill.textContent = "PAUSED";
+                toggleBtn.textContent = "Resume Service";
+            }
+
+            // Stats
+            document.getElementById('stat-repos').textContent = data.repositories ? data.repositories.filter(r => r.enabled).length : 0;
+            document.getElementById('stat-prs').textContent = data.pull_requests ? data.pull_requests.length : 0;
+            document.getElementById('stat-approved').textContent = data.pull_requests ? data.pull_requests.filter(p => p.status_badge === 'APPROVED').length : 0;
+            
+            if (data.last_run) {
+                const date = new Date(data.last_run);
+                document.getElementById('stat-last-run').textContent = date.toLocaleTimeString();
+            } else {
+                document.getElementById('stat-last-run').textContent = "Scanning...";
+            }
+
+            // Rate Limit Banner
+            rateLimitExpiresAt = data.rate_limit_expires_at || 0;
+            const banner = document.getElementById('rate-limit-banner');
+            if (data.rate_limited && rateLimitExpiresAt > (Date.now() / 1000)) {
+                banner.classList.remove('hidden');
+                document.getElementById('rate-limit-reason-text').textContent = `(${data.rate_limit_reason || 'Quota exceeded'})`;
+                updateCountdown();
+            } else {
+                banner.classList.add('hidden');
+            }
+
+            // PR Grid
+            renderPRs(data.pull_requests || []);
+        }
+
+        function updateCountdown() {
+            if (!rateLimitExpiresAt) return;
+            const now = Math.floor(Date.now() / 1000);
+            const remaining = Math.max(0, rateLimitExpiresAt - now);
+
+            if (remaining <= 0) {
+                document.getElementById('rate-limit-timer-text').textContent = "Expiring now...";
+                return;
+            }
+
+            const mins = Math.floor(remaining / 60);
+            const secs = remaining % 60;
+            const resumeDate = new Date(rateLimitExpiresAt * 1000).toLocaleTimeString();
+            document.getElementById('rate-limit-timer-text').textContent = 
+                `Will retry in ${mins}m ${secs}s (at ${resumeDate})`;
+        }
+
+        function getBadgeInfo(pr) {
+            switch (pr.status_badge) {
+                case 'RATE_LIMITED':
+                    return { class: 'badge-orange', text: `⏳ Rate Limited (${pr.status_label || 'Retrying'})` };
+                case 'REVIEW_IN_PROGRESS':
+                    return { class: 'badge-blue', text: `⚡ Review in Progress (Attempt ${pr.attempt || 1}/3)` };
+                case 'APPROVED':
+                    return { class: 'badge-green', text: '✅ Approved by You' };
+                case 'COMMENTS_POSTED':
+                    return { class: 'badge-yellow', text: '💬 Comments Posted' };
+                case 'SKIPPED_MAX_FILES':
+                    return { class: 'badge-red', text: '🛑 Skipped (>100 Files)' };
+                case 'OWN_PR':
+                    return { class: 'badge-purple', text: '👤 Your PR (Author)' };
+                default:
+                    return { class: 'badge-gray', text: '⏳ Pending Review' };
+            }
+        }
+
+        function renderPRs(prs) {
+            const container = document.getElementById('pr-container');
+            if (!prs || prs.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state" style="grid-column: 1 / -1;">
+                        <h3>✨ All Caught Up</h3>
+                        <p>No open pull requests detected in your enabled repositories.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = prs.map(pr => {
+                const badge = getBadgeInfo(pr);
+                const hasReport = !!pr.report_file;
+
+                return `
+                <div class="pr-card">
+                    <div>
+                        <div class="pr-card-header">
+                            <span class="repo-badge">${pr.repo} #${pr.number}</span>
+                            <span class="badge ${badge.class}">${badge.text}</span>
+                        </div>
+                        <a href="${pr.html_url}" target="_blank" class="pr-title">${escapeHtml(pr.title)}</a>
+                        <div class="pr-meta">
+                            <span>👤 <strong>${pr.author}</strong></span>
+                            <span>🎯 <code>${pr.base_ref}</code> &larr; <code>${pr.head_ref}</code></span>
+                            <span>#️⃣ <code>${(pr.head_sha || '').substring(0, 7)}</code></span>
+                        </div>
+                    </div>
+                    <div class="pr-actions">
+                        ${hasReport ? `<a href="/reports/${pr.report_file}" target="_blank" class="btn btn-sm btn-primary">📄 View Report</a>` : ''}
+                        <a href="${pr.html_url}" target="_blank" class="btn btn-sm">GitHub ↗</a>
+                        <button class="btn btn-sm" onclick="triggerReview('${pr.pr_key}', false)">⚡ Review</button>
+                        <button class="btn btn-sm btn-warning" onclick="triggerReview('${pr.pr_key}', true)" title="Bypass rate limit or prior review">⚡ Force</button>
+                    </div>
+                </div>
+                `;
+            }).join('');
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+            return text.replace(/[&<>"']/g, m => map[m]);
+        }
+
+        async function triggerScan(force = false) {
+            try {
+                await fetch('/api/trigger', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ force })
+                });
+                fetchStatus();
+            } catch (e) {
+                alert('Trigger failed: ' + e);
+            }
+        }
+
+        async function triggerReview(prKey, force = false) {
+            try {
+                await fetch('/api/trigger', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ pr_key: prKey, force })
+                });
+                fetchStatus();
+            } catch (e) {
+                alert('Review trigger failed: ' + e);
+            }
+        }
+
+        async function clearRateLimit() {
+            try {
+                await fetch('/api/clear-rate-limit', { method: 'POST' });
+                fetchStatus();
+            } catch (e) {
+                alert('Failed to clear rate limit: ' + e);
+            }
+        }
+
+        async function toggleService() {
+            if (!currentStatus) return;
+            const newStatus = !currentStatus.service_enabled;
+            try {
+                await fetch('/api/service/toggle', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled: newStatus })
+                });
+                fetchStatus();
+            } catch (e) {
+                alert('Failed to toggle service: ' + e);
+            }
+        }
+
+        /* Modal & Repo Management */
+        function openRepoModal() {
+            document.getElementById('repo-modal').classList.add('active');
+            renderRepoList();
+        }
+
+        function closeRepoModal() {
+            document.getElementById('repo-modal').classList.remove('active');
+            document.getElementById('repo-modal-msg').textContent = '';
+        }
+
+        function renderRepoList() {
+            const listEl = document.getElementById('repo-list');
+            if (!currentStatus || !currentStatus.repositories) return;
+
+            listEl.innerHTML = currentStatus.repositories.map(r => `
+                <div class="repo-item">
+                    <span style="font-family: monospace; font-weight: 600;">${r.full_name}</span>
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <button class="btn btn-sm ${r.enabled ? 'btn-success' : 'btn-secondary'}" onclick="toggleRepo('${r.full_name}')">
+                            ${r.enabled ? 'Active' : 'Paused'}
+                        </button>
+                        <button class="btn btn-sm btn-danger" onclick="removeRepo('${r.full_name}')">🗑</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function toggleRepo(fullName) {
+            try {
+                await fetch('/api/repos/toggle', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ full_name: fullName })
+                });
+                await fetchStatus();
+                renderRepoList();
+            } catch (e) {
+                alert('Error toggling repo: ' + e);
+            }
+        }
+
+        async function removeRepo(fullName) {
+            if (!confirm(`Are you sure you want to remove ${fullName}?`)) return;
+            try {
+                await fetch('/api/repos/remove', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ full_name: fullName })
+                });
+                await fetchStatus();
+                renderRepoList();
+            } catch (e) {
+                alert('Error removing repo: ' + e);
+            }
+        }
+
+        async function addRepo() {
+            const input = document.getElementById('new-repo-name');
+            const msgEl = document.getElementById('repo-modal-msg');
+            const fullName = input.value.trim();
+            if (!fullName) return;
+
+            msgEl.style.color = '#38bdf8';
+            msgEl.textContent = 'Validating repository on GitHub...';
+
+            try {
+                const res = await fetch('/api/repos/add', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ full_name: fullName })
+                });
+                const result = await res.json();
+                if (res.ok) {
+                    msgEl.style.color = '#10b981';
+                    msgEl.textContent = `Repository ${fullName} successfully added!`;
+                    input.value = '';
+                    await fetchStatus();
+                    renderRepoList();
+                } else {
+                    msgEl.style.color = '#ef4444';
+                    msgEl.textContent = `Error: ${result.error || 'Failed to add repository'}`;
+                }
+            } catch (e) {
+                msgEl.style.color = '#ef4444';
+                msgEl.textContent = 'Error: ' + e;
+            }
+        }
+
+        // Tickers & Init
+        setInterval(updateCountdown, 1000);
+        setInterval(fetchStatus, 5000);
+        fetchStatus();
+    </script>
+</body>
+</html>
