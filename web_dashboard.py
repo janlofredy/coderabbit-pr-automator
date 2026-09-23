@@ -9,7 +9,7 @@ from socketserver import ThreadingMixIn
 from typing import Dict, Any, List, Optional
 from urllib.parse import urlparse, parse_qs
 
-from config_manager import ConfigManager
+from config_manager import ConfigManager, safe_int_env
 from state_manager import StateManager
 from github_client import GitHubClient
 from auto_review_prs import AutoReviewEngine, DEFAULT_REVIEWS_DIR
@@ -17,7 +17,7 @@ from auto_review_prs import AutoReviewEngine, DEFAULT_REVIEWS_DIR
 logger = logging.getLogger("dashboard")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
-PORT = int(os.getenv("PORT", "8765"))
+PORT = safe_int_env("PORT", 8765)
 HOST = os.getenv("HOST", "0.0.0.0")
 
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):

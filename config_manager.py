@@ -9,6 +9,15 @@ DEFAULT_CONFIG_DIR = os.getenv("CONFIG_DIR", os.path.expanduser("~/.coderabbit")
 DEFAULT_CONFIG_FILE = os.getenv("CONFIG_PATH", os.path.join(DEFAULT_CONFIG_DIR, "config.json"))
 DEFAULT_REPOS_BASE_DIR = os.getenv("REPOS_DIR", "/app/repos")
 
+def safe_int_env(key: str, default: int) -> int:
+    val = os.getenv(key, "")
+    if val is not None and str(val).strip():
+        try:
+            return int(str(val).strip())
+        except ValueError:
+            return default
+    return default
+
 class ConfigManager:
     """Manages persistent repository and service configuration."""
 
@@ -30,9 +39,10 @@ class ConfigManager:
                         "path": os.path.join(self.repos_base_dir, repo_clean)
                     })
 
-        poll_interval = int(os.getenv("POLL_INTERVAL_SECONDS", "900"))
-        max_files = int(os.getenv("MAX_FILES_LIMIT", "100"))
-        auto_approve_env = os.getenv("AUTO_APPROVE", "true").lower() in ("true", "1", "yes")
+        poll_interval = safe_int_env("POLL_INTERVAL_SECONDS", 900)
+        max_files = safe_int_env("MAX_FILES_LIMIT", 100)
+        auto_approve_val = os.getenv("AUTO_APPROVE", "true")
+        auto_approve_env = str(auto_approve_val).lower() in ("true", "1", "yes") if auto_approve_val else True
 
         return {
             "repositories": repo_list,

@@ -7,7 +7,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional, Tuple
 
-from config_manager import ConfigManager
+from config_manager import ConfigManager, safe_int_env
 from state_manager import StateManager
 from github_client import GitHubClient, GitHubAPIException
 
@@ -15,7 +15,7 @@ logger = logging.getLogger("auto_review")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
 DEFAULT_REVIEWS_DIR = os.getenv("REVIEWS_DIR", os.path.expanduser("~/.coderabbit/reviews"))
-DEFAULT_TIMEOUT_SECONDS = int(os.getenv("CODERABBIT_TIMEOUT", "240"))
+DEFAULT_TIMEOUT_SECONDS = safe_int_env("CODERABBIT_TIMEOUT", 240)
 
 class AutoReviewEngine:
     """Core review engine coordinating Git sync, CodeRabbit CLI runs, and GitHub PR reviews."""
