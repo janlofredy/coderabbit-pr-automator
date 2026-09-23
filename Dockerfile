@@ -7,19 +7,21 @@ ENV DEBIAN_FRONTEND=noninteractive \
     CONFIG_DIR=/root/.coderabbit \
     REVIEWS_DIR=/root/.coderabbit/reviews \
     REPOS_DIR=/app/repos \
-    PORT=8765
+    PORT=8765 \
+    PATH="/root/.local/bin:/usr/local/bin:$PATH"
 
 # Install system dependencies & CodeRabbit prerequisites
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
+    unzip \
     ca-certificates \
     libsecret-1-0 \
     procps \
     && rm -rf /var/lib/apt/lists/*
 
-# Install official CodeRabbit CLI
-RUN curl -fsSL https://cli.coderabbit.ai/install.sh | sh
+# Install official CodeRabbit CLI to /usr/local/bin (with CI=1 to skip interactive prompts)
+RUN CI=1 CODERABBIT_INSTALL_DIR=/usr/local/bin curl -fsSL https://cli.coderabbit.ai/install.sh | sh
 
 # Set up application workspace
 WORKDIR /app
