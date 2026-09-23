@@ -14,6 +14,8 @@ class TestConfigAndStateManager(unittest.TestCase):
 
     def tearDown(self):
         shutil.rmtree(self.test_dir, ignore_errors=True)
+        for key in ["REPOSITORIES", "POLL_INTERVAL_SECONDS", "MAX_FILES_LIMIT", "AUTO_APPROVE", "STRICT_APPROVAL"]:
+            os.environ.pop(key, None)
 
     def test_config_initialization(self):
         os.environ["REPOSITORIES"] = "org/repo-a, org/repo-b"
@@ -124,5 +126,17 @@ class TestConfigAndStateManager(unittest.TestCase):
         self.assertEqual(status["review_outcome"], "APPROVED")
         self.assertIn("updated_at", status)
 
+    def test_strict_approval_config(self):
+        mgr = ConfigManager(config_path=self.config_path, repos_base_dir=self.repos_dir)
+        # Default should be True
+        self.assertTrue(mgr.is_strict_approval())
+        # Toggle to False
+        mgr.set_strict_approval(False)
+        self.assertFalse(mgr.is_strict_approval())
+        # Toggle back to True
+        mgr.set_strict_approval(True)
+        self.assertTrue(mgr.is_strict_approval())
+
 if __name__ == "__main__":
     unittest.main()
+

@@ -179,5 +179,115 @@ class TestReviewEngine(unittest.TestCase):
         self.assertIn("Will retry in", body)
         self.assertIn("Attempt**: 1 of 3", body)
 
+    def test_strict_approval_blocks_approval_on_minor_issue(self):
+        self.gh_client.get_username.return_value = "coderabbit-bot"
+        self.gh_client.has_user_reviewed_sha.return_value = (False, None)
+        self.gh_client.create_or_update_comment.return_value = {"id": 601}
+        self.gh_client.submit_pull_request_review.return_value = {"id": 602}
+
+        repo_info = {"full_name": "owner/my-repo", "path": os.path.join(self.repos_dir, "owner/my-repo")}
+        pr = {
+            "number": 11,
+            "title": "Minor styling PR",
+            "changed_files": 2,
+            "user": {"login": "contributor"},
+            "base": {"ref": "main"},
+            "head": {"ref": "patch-1", "sha": "11223344"},
+            "html_url": "https://github.com/owner/my-repo/pull/11"
+        }
+
+        # Minor finding
+        minor_output = '{"findings": [{"file": "main.py", "line": 10, "severity": "MINOR", "message": "Variable name could be more descriptive"}], "summary": "One minor improvement suggestion."}'
+
+        with patch.object(self.engine, "prepare_repo", return_value=True), \
+             patch.object(self.engine, "checkout_pr", return_value=True), \
+             patch.object(self.engine, "count_changed_files", return_value=2), \
+             patch.object(self.engine, "get_valid_diff_lines", return_value={"main.py": [10]}), \
+             patch.object(self.engine, "execute_coderabbit_cli", return_value=(0, minor_output, "")):
+
+            res = self.engine.review_single_pr(repo_info, pr)
+
+        self.assertEqual(res["status"], "COMPLETED")
+        self.assertEqual(res["event"], "COMMENT")
+        self.assertEqual(res["review_outcome"], "NEEDS_WORK (Minor Issues Detected)")
+        self.assertEqual(res["critical_major_count"], 0)
+        self.assertEqual(res["minor_count"], 1)
+
+        # Check review call on GitHub client
+        review_call = self.gh_client.submit_pull_request_review.call_args
+        self.assertEqual(review_call.kwargs["event"], "COMMENT")
+        self.assertIn("NEEDS_WORK (Minor Issues Detected)", review_call.kwargs["body"])
+
+    def test_strict_approval_allows_approval_when_disabled(self):
+        self.gh_client.get_username.return_value = "coderabbit-bot"
+        self.gh_client.has_user_reviewed_sha.return_value = (False, None)
+        self.gh_client.create_or_update_comment.return_value = {"id": 701}
+        self.gh_client.submit_pull_request_review.return_value = {"id": 702}
+
+        # Disable strict approval in config
+        self.cfg_mgr.set_strict_approval(False)
+
+        repo_info = {"full_name": "owner/my-repo", "path": os.path.join(self.repos_dir, "owner/my-repo")}
+        pr = {
+            "number": 12,
+            "title": "Minor styling PR",
+            "changed_files": 2,
+            "user": {"login": "contributor"},
+            "base": {"ref": "main"},
+            "head": {"ref": "patch-2", "sha": "55667788"},
+            "html_url": "https://github.com/owner/my-repo/pull/12"
+        }
+
+        minor_output = '{"findings": [{"file": "main.py", "line": 10, "severity": "WARNING", "message": "Minor style issue"}], "summary": "Minor warning."}'
+
+        with patch.object(self.engine, "prepare_repo", return_value=True), \
+             patch.object(self.engine, "checkout_pr", return_value=True), \
+             patch.object(self.engine, "count_changed_files", return_value=2), \
+             patch.object(self.engine, "get_valid_diff_lines", return_value={}), \
+             patch.object(self.engine, "execute_coderabbit_cli", return_value=(0, minor_output, "")):
+
+            res = self.engine.review_single_pr(repo_info, pr)
+
+        self.assertEqual(res["status"], "COMPLETED")
+        self.assertEqual(res["event"], "APPROVE")
+        self.assertEqual(res["review_outcome"], "APPROVED")
+        self.assertEqual(res["minor_count"], 1)
+
+    def test_clean_pr_approved_in_strict_mode(self):
+        self.gh_client.get_username.return_value = "coderabbit-bot"
+        self.gh_client.has_user_reviewed_sha.return_value = (False, None)
+        self.gh_client.create_or_update_comment.return_value = {"id": 801}
+        self.gh_client.submit_pull_request_review.return_value = {"id": 802}
+
+        self.cfg_mgr.set_strict_approval(True)
+
+        repo_info = {"full_name": "owner/my-repo", "path": os.path.join(self.repos_dir, "owner/my-repo")}
+        pr = {
+            "number": 13,
+            "title": "Perfect clean PR",
+            "changed_files": 1,
+            "user": {"login": "contributor"},
+            "base": {"ref": "main"},
+            "head": {"ref": "perfect-feature", "sha": "aabbccdd"},
+            "html_url": "https://github.com/owner/my-repo/pull/13"
+        }
+
+        clean_output = '{"findings": [], "summary": "Code looks spotless!"}'
+
+        with patch.object(self.engine, "prepare_repo", return_value=True), \
+             patch.object(self.engine, "checkout_pr", return_value=True), \
+             patch.object(self.engine, "count_changed_files", return_value=1), \
+             patch.object(self.engine, "get_valid_diff_lines", return_value={}), \
+             patch.object(self.engine, "execute_coderabbit_cli", return_value=(0, clean_output, "")):
+
+            res = self.engine.review_single_pr(repo_info, pr)
+
+        self.assertEqual(res["status"], "COMPLETED")
+        self.assertEqual(res["event"], "APPROVE")
+        self.assertEqual(res["review_outcome"], "APPROVED")
+        self.assertEqual(res["critical_major_count"], 0)
+        self.assertEqual(res["minor_count"], 0)
+
 if __name__ == "__main__":
     unittest.main()
+

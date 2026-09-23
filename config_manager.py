@@ -43,12 +43,15 @@ class ConfigManager:
         max_files = safe_int_env("MAX_FILES_LIMIT", 100)
         auto_approve_val = os.getenv("AUTO_APPROVE", "true")
         auto_approve_env = str(auto_approve_val).lower() in ("true", "1", "yes") if auto_approve_val else True
+        strict_approval_val = os.getenv("STRICT_APPROVAL", "true")
+        strict_approval_env = str(strict_approval_val).lower() in ("true", "1", "yes") if strict_approval_val else True
 
         return {
             "repositories": repo_list,
             "poll_interval_seconds": poll_interval,
             "max_files_limit": max_files,
             "auto_approve": auto_approve_env,
+            "strict_approval": strict_approval_env,
             "service_enabled": True
         }
 
@@ -160,3 +163,16 @@ class ConfigManager:
         cfg["service_enabled"] = bool(enabled)
         self.save_config(cfg)
         return cfg["service_enabled"]
+
+    def is_strict_approval(self) -> bool:
+        """Checks if strict approval mode is enabled (any minor issue blocks approval)."""
+        cfg = self.load_config()
+        return bool(cfg.get("strict_approval", True))
+
+    def set_strict_approval(self, strict: bool) -> bool:
+        """Sets strict approval mode."""
+        cfg = self.load_config()
+        cfg["strict_approval"] = bool(strict)
+        self.save_config(cfg)
+        return cfg["strict_approval"]
+

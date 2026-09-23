@@ -297,6 +297,7 @@ class AutoReviewEngine:
         config = self.config_manager.load_config()
         max_files_limit = config.get("max_files_limit", 100)
         auto_approve = config.get("auto_approve", True)
+        strict_approval = config.get("strict_approval", True)
 
         # Check rate limit cooldown unless force is requested
         if not force:
@@ -475,6 +476,7 @@ class AutoReviewEngine:
         valid_lines_by_file = self.get_valid_diff_lines(repo_path, base_ref, pr_number)
         line_comments = []
         critical_major_count = 0
+        minor_count = 0
 
         for f in findings_list:
             if not isinstance(f, dict):
@@ -487,6 +489,8 @@ class AutoReviewEngine:
 
             if severity in ("CRITICAL", "MAJOR", "ERROR"):
                 critical_major_count += 1
+            elif severity not in ("INFO", "HINT", "NOTE", "TIP"):
+                minor_count += 1
 
             if file_path and line_no is not None:
                 try:
@@ -511,6 +515,10 @@ class AutoReviewEngine:
             else:
                 event = "REQUEST_CHANGES"
                 review_outcome = "CHANGES_REQUESTED"
+        elif strict_approval and minor_count > 0:
+            # Strict mode: any minor issue prevents approval
+            event = "COMMENT"
+            review_outcome = "NEEDS_WORK (Minor Issues Detected)"
         else:
             if auto_approve and not is_own_pr:
                 event = "APPROVE"
@@ -537,6 +545,7 @@ class AutoReviewEngine:
 - **Review Outcome**: `{review_outcome}`
 - **Files Modified**: {file_count}
 - **Critical / Major Issues**: {critical_major_count}
+- **Minor / Warning Issues**: {minor_count}
 - **Total Findings**: {len(findings_list)}
 - **Execution Time**: {elapsed:.1f}s
 
@@ -562,7 +571,7 @@ class AutoReviewEngine:
 - **Reviewer**: @{auth_user or 'coderabbit-bot'}
 - **Target Base Branch**: `{base_ref}`
 - **Head Branch**: `{head_ref}` (`{head_sha[:8]}`)
-- **Status**: {review_outcome} ({critical_major_count} critical/major findings)
+- **Status**: {review_outcome} ({critical_major_count} critical/major, {minor_count} minor findings)
 ---
 Review complete. Detailed findings submitted directly to this pull request.
 """
@@ -579,6 +588,7 @@ Review complete. Detailed findings submitted directly to this pull request.
             "event": event,
             "findings_count": len(findings_list),
             "critical_major_count": critical_major_count,
+            "minor_count": minor_count,
             "report_file": report_file,
             "head_sha": head_sha,
             "title": pr.get("title", ""),

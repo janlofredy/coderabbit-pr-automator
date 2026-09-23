@@ -191,7 +191,9 @@ class DashboardBackend:
                 item["attempt"] = status_entry.get("attempt", 1)
             elif status_entry.get("status") == "SKIPPED_MAX_FILES":
                 item["status_badge"] = "SKIPPED_MAX_FILES"
-                item["status_label"] = "Skipped (>100 Files)"
+            elif status_entry.get("review_outcome") == "NEEDS_WORK (Minor Issues Detected)":
+                item["status_badge"] = "COMMENTS_POSTED"
+                item["status_label"] = "Needs Work (Minor Issues)"
             elif status_entry.get("review_outcome") == "APPROVED" or status_entry.get("review_state") == "APPROVED":
                 item["status_badge"] = "APPROVED"
                 item["status_label"] = "Approved by You"
@@ -210,6 +212,7 @@ class DashboardBackend:
 
         return {
             "service_enabled": config.get("service_enabled", True),
+            "strict_approval": config.get("strict_approval", True),
             "last_run": state.get("last_run_timestamp", ""),
             "rate_limited": is_rate_limited,
             "rate_limit_expires_at": state.get("rate_limit_expires_at", 0),
@@ -313,6 +316,20 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             new_state = backend.config_manager.set_service_enabled(enabled)
             self._set_headers(200)
             self.wfile.write(json.dumps({"service_enabled": new_state}).encode("utf-8"))
+            return
+
+        if path == "/api/strict-approval/toggle":
+            current = backend.config_manager.is_strict_approval()
+            new_state = backend.config_manager.set_strict_approval(not current)
+            self._set_headers(200)
+            self.wfile.write(json.dumps({"strict_approval": new_state}).encode("utf-8"))
+            return
+
+        if path == "/api/strict-approval":
+            enabled = data.get("strict", data.get("enabled", True))
+            new_state = backend.config_manager.set_strict_approval(enabled)
+            self._set_headers(200)
+            self.wfile.write(json.dumps({"strict_approval": new_state}).encode("utf-8"))
             return
 
         if path == "/api/repos/toggle":

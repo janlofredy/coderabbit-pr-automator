@@ -117,7 +117,8 @@ The system supports two headless authentication methods:
 | `REPOSITORIES` | Comma-separated default repositories to monitor | `cictd-isds/chrmd-web,cictd-isds/chrmd-api` |
 | `POLL_INTERVAL_SECONDS` | Interval between background PR scans | `900` (15 minutes) |
 | `MAX_FILES_LIMIT` | Maximum modified file threshold for reviews | `100` |
-| `AUTO_APPROVE` | Automatically submit `APPROVE` on 0 major issues | `true` |
+| `AUTO_APPROVE` | Automatically submit `APPROVE` on clean PRs | `true` |
+| `STRICT_APPROVAL` | Strict mode: blocks approval if any minor issue/warning is found | `true` |
 | `CODERABBIT_API_KEY` | Optional CodeRabbit API key | *Empty* |
 | `PORT` | Web dashboard listening port | `8765` |
 | `CONFIG_DIR` | Directory holding `config.json` and state files | `/root/.coderabbit` |
@@ -130,7 +131,8 @@ The system supports two headless authentication methods:
 
 | Endpoint | Method | Description |
 | :--- | :--- | :--- |
-| `/api/status` | `GET` | Returns aggregated status, active rate limits, and PR list |
+| `/api/status` | `GET` | Returns aggregated status, active rate limits, strict approval mode, and PR list |
+| `/api/strict-approval/toggle` | `POST` | Toggles strict approval mode on/off |
 | `/api/repos` | `GET` | Lists all configured repositories and their active status |
 | `/api/repos/toggle` | `POST` | Toggles repository state: `{"full_name": "owner/repo"}` |
 | `/api/repos/add` | `POST` | Adds and validates repository: `{"full_name": "owner/repo"}` |

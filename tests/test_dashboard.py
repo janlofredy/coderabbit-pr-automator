@@ -167,9 +167,33 @@ class TestDashboardBackend(unittest.TestCase):
             res = json.loads(resp.read().decode())
             self.assertEqual(res["status"], "cleared")
 
+        # 5. Test POST /api/strict-approval/toggle
+        req = urllib.request.Request(f"{base_url}/api/strict-approval/toggle", data=b"{}", method="POST")
+        with urllib.request.urlopen(req) as resp:
+            self.assertEqual(resp.status, 200)
+            res = json.loads(resp.read().decode())
+            self.assertIn("strict_approval", res)
+
         server.shutdown()
         server.server_close()
 
+    def test_status_badge_needs_work_minor_issues(self):
+        self.backend.refresh_pr_cache()
+        pr_key = "owner/repo1#101"
+
+        self.state_mgr.record_pr_status(pr_key, {
+            "status": "COMPLETED",
+            "review_outcome": "NEEDS_WORK (Minor Issues Detected)",
+            "minor_count": 2,
+            "report_file": "report.html"
+        })
+
+        status = self.backend.get_annotated_status()
+        pr = status["pull_requests"][0]
+        self.assertEqual(pr["status_badge"], "COMMENTS_POSTED")
+        self.assertEqual(pr["status_label"], "Needs Work (Minor Issues)")
+
 if __name__ == "__main__":
     unittest.main()
+
 
