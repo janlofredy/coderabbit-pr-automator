@@ -23,8 +23,8 @@ services:
         en_us: "Automated AI code reviews for GitHub PRs using CodeRabbit CLI"
       description:
         en_us: "Headless continuous CI/CD background review service and real-time Web Dashboard that monitors GitHub repositories, performs AI code reviews via CodeRabbit CLI, posts per-file inline comments, handles Free Tier rate limits, and automatically approves clean PRs."
-      icon: "https://raw.githubusercontent.com/coderabbitai/.github/main/profile/coderabbit-logo.png"
-      thumbnail: "https://raw.githubusercontent.com/coderabbitai/.github/main/profile/coderabbit-logo.png"
+      icon: "https://cdn.jsdelivr.net/gh/janlofredy/coderabbit-pr-automator@main/assets/icon.png"
+      thumbnail: "https://cdn.jsdelivr.net/gh/janlofredy/coderabbit-pr-automator@main/assets/icon.png"
       developer: "CodeRabbit"
       author: "janlofredy"
       port_map: "8765"
