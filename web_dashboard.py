@@ -259,6 +259,35 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 self.wfile.write(f"Error loading dashboard: {e}".encode("utf-8"))
             return
 
+        if path in ("/favicon.ico", "/assets/favicon.ico"):
+            ico_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "favicon.ico")
+            if os.path.exists(ico_path):
+                with open(ico_path, "rb") as f:
+                    content = f.read()
+                self._set_headers(200, "image/x-icon")
+                self.wfile.write(content)
+                return
+
+        if path in ("/favicon.png", "/assets/icon.png"):
+            png_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "icon.png")
+            if os.path.exists(png_path):
+                with open(png_path, "rb") as f:
+                    content = f.read()
+                self._set_headers(200, "image/png")
+                self.wfile.write(content)
+                return
+
+        if path.startswith("/assets/"):
+            filename = os.path.basename(path)
+            asset_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", filename)
+            if os.path.exists(asset_path):
+                mime = "image/png" if filename.endswith(".png") else "image/x-icon"
+                with open(asset_path, "rb") as f:
+                    content = f.read()
+                self._set_headers(200, mime)
+                self.wfile.write(content)
+                return
+
         if path == "/api/status":
             data = backend.get_annotated_status()
             self._set_headers(200)

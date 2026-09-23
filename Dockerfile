@@ -33,6 +33,7 @@ WORKDIR /app
 
 # Copy application files
 COPY config_manager.py state_manager.py github_client.py auto_review_prs.py web_dashboard.py dashboard.html entrypoint.sh /app/
+COPY assets /app/assets/
 
 # Make entrypoint executable
 RUN chmod +x /app/entrypoint.sh
