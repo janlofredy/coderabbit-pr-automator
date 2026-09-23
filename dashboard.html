@@ -344,9 +344,9 @@
         <div class="header-actions">
             <span id="service-status-pill" class="badge badge-green">RUNNING</span>
             <span id="strict-mode-pill" class="badge badge-purple" title="Strict Mode: PRs with any minor issue are not approved">STRICT: ON</span>
-            <button id="btn-toggle-strict" class="btn btn-sm" onclick="toggleStrictApproval()" title="Toggle Strict Approval Mode">Strict: ON</button>
+            <button class="btn btn-sm" onclick="openSettingsModal()">⚙️ Settings</button>
+            <button class="btn btn-sm" onclick="openRepoModal()">📁 Repositories</button>
             <button id="btn-toggle-service" class="btn btn-sm" onclick="toggleService()">Pause Service</button>
-            <button class="btn btn-sm" onclick="openRepoModal()">⚙️ Manage Repos</button>
             <button class="btn btn-primary btn-sm" onclick="triggerScan(false)">▶ Run Scan Now</button>
             <button class="btn btn-sm" onclick="fetchStatus()">🔄 Refresh</button>
         </div>
@@ -409,6 +409,67 @@
                 <button class="btn btn-primary" onclick="addRepo()">Add Repo</button>
             </div>
             <div id="repo-modal-msg" style="margin-top: 0.75rem; font-size: 0.85rem;"></div>
+        </div>
+    </div>
+
+    <!-- Runtime Settings Modal -->
+    <div id="settings-modal" class="modal-overlay">
+        <div class="modal" style="max-width: 550px;">
+            <div class="modal-header">
+                <h3>⚙️ Service Configuration & Settings</h3>
+                <button class="btn btn-sm" onclick="closeSettingsModal()">✕</button>
+            </div>
+            <div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1.25rem;">
+                Settings are stored in <code>config.json</code> on your persistent storage volume and take effect immediately at runtime.
+            </div>
+
+            <div style="display: flex; flex-direction: column; gap: 1.15rem;">
+                <div>
+                    <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem;">Polling Interval (Seconds)</label>
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <input type="number" id="setting-poll-interval" class="form-input" min="30" step="30" style="max-width: 140px;">
+                        <button type="button" class="btn btn-sm" onclick="setPollPreset(300)">5m</button>
+                        <button type="button" class="btn btn-sm" onclick="setPollPreset(900)">15m</button>
+                        <button type="button" class="btn btn-sm" onclick="setPollPreset(1800)">30m</button>
+                        <button type="button" class="btn btn-sm" onclick="setPollPreset(3600)">1h</button>
+                    </div>
+                    <small style="color: var(--text-muted); font-size: 0.75rem;">Time between automatic scans of open pull requests.</small>
+                </div>
+
+                <div>
+                    <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem;">Max Files Limit (Safety Ceiling)</label>
+                    <input type="number" id="setting-max-files" class="form-input" min="1" max="1000" style="max-width: 140px;">
+                    <small style="color: var(--text-muted); font-size: 0.75rem; display: block; margin-top: 0.25rem;">PRs modifying more files than this threshold will be skipped with an explanatory comment (Free Tier ceiling is 100).</small>
+                </div>
+
+                <div style="display: flex; flex-direction: column; gap: 0.5rem; padding: 0.85rem; background: #1a2234; border-radius: 6px; border: 1px solid #1f2937;">
+                    <label style="display: flex; align-items: center; gap: 0.6rem; cursor: pointer; font-size: 0.9rem;">
+                        <input type="checkbox" id="setting-auto-approve" style="width: 16px; height: 16px; accent-color: var(--primary);">
+                        <span><strong>Auto-Approve Clean PRs</strong></span>
+                    </label>
+                    <small style="color: var(--text-muted); font-size: 0.75rem; margin-left: 1.6rem;">Automatically submit GitHub <code>APPROVE</code> review when 0 issues are found.</small>
+
+                    <label style="display: flex; align-items: center; gap: 0.6rem; cursor: pointer; font-size: 0.9rem; margin-top: 0.5rem;">
+                        <input type="checkbox" id="setting-strict-approval" style="width: 16px; height: 16px; accent-color: var(--primary);">
+                        <span><strong>Strict Approval Policy</strong> (Block on minor issues/warnings)</span>
+                    </label>
+                    <small style="color: var(--text-muted); font-size: 0.75rem; margin-left: 1.6rem;">If enabled, any minor issue or warning prevents approval (submits <code>COMMENT</code> instead).</small>
+                </div>
+
+                <div>
+                    <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem;">CodeRabbit API Key (Optional)</label>
+                    <input type="password" id="setting-coderabbit-key" class="form-input" placeholder="Leave blank to keep existing key, or type new key">
+                    <div id="setting-key-status" style="font-size: 0.75rem; margin-top: 0.35rem; color: var(--text-muted);"></div>
+                </div>
+            </div>
+
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--border-color);">
+                <div id="settings-modal-msg" style="font-size: 0.85rem;"></div>
+                <div style="display: flex; gap: 0.5rem;">
+                    <button class="btn btn-secondary" onclick="closeSettingsModal()">Cancel</button>
+                    <button class="btn btn-primary" onclick="saveSettings()">Save Configuration</button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -712,6 +773,99 @@
             } catch (e) {
                 msgEl.style.color = '#ef4444';
                 msgEl.textContent = 'Error: ' + e;
+            }
+        }
+
+        /* Settings Modal */
+        async function openSettingsModal() {
+            document.getElementById('settings-modal').classList.add('active');
+            document.getElementById('settings-modal-msg').textContent = '';
+            try {
+                const res = await fetch('/api/config');
+                const cfg = await res.json();
+                loadSettingsIntoModal(cfg);
+            } catch (e) {
+                if (currentStatus && currentStatus.config) {
+                    loadSettingsIntoModal(currentStatus.config);
+                }
+            }
+        }
+
+        function closeSettingsModal() {
+            document.getElementById('settings-modal').classList.remove('active');
+            document.getElementById('settings-modal-msg').textContent = '';
+        }
+
+        function loadSettingsIntoModal(cfg) {
+            if (!cfg) return;
+            document.getElementById('setting-poll-interval').value = cfg.poll_interval_seconds || 900;
+            document.getElementById('setting-max-files').value = cfg.max_files_limit || 100;
+            document.getElementById('setting-auto-approve').checked = (cfg.auto_approve !== false);
+            document.getElementById('setting-strict-approval').checked = (cfg.strict_approval !== false);
+            
+            const keyStatus = document.getElementById('setting-key-status');
+            if (cfg.has_coderabbit_api_key) {
+                keyStatus.innerHTML = `<span style="color: #34d399;">● Configured (${cfg.coderabbit_api_key_masked || 'Active'})</span> — enter new key to replace, or enter <code>none</code> to remove.`;
+            } else {
+                keyStatus.innerHTML = `<span style="color: #94a3b8;">○ Not configured (running in Free Tier mode)</span>`;
+            }
+            document.getElementById('setting-coderabbit-key').value = '';
+        }
+
+        function setPollPreset(seconds) {
+            document.getElementById('setting-poll-interval').value = seconds;
+        }
+
+        async function saveSettings() {
+            const msgEl = document.getElementById('settings-modal-msg');
+            const pollInterval = parseInt(document.getElementById('setting-poll-interval').value, 10);
+            const maxFiles = parseInt(document.getElementById('setting-max-files').value, 10);
+            const autoApprove = document.getElementById('setting-auto-approve').checked;
+            const strictApproval = document.getElementById('setting-strict-approval').checked;
+            const keyInput = document.getElementById('setting-coderabbit-key').value.trim();
+
+            if (isNaN(pollInterval) || pollInterval < 10) {
+                msgEl.style.color = '#ef4444';
+                msgEl.textContent = 'Poll interval must be at least 10 seconds.';
+                return;
+            }
+            if (isNaN(maxFiles) || maxFiles < 1) {
+                msgEl.style.color = '#ef4444';
+                msgEl.textContent = 'Max files limit must be at least 1.';
+                return;
+            }
+
+            const payload = {
+                poll_interval_seconds: pollInterval,
+                max_files_limit: maxFiles,
+                auto_approve: autoApprove,
+                strict_approval: strictApproval
+            };
+
+            if (keyInput) {
+                payload.coderabbit_api_key = (keyInput.toLowerCase() === 'none' || keyInput.toLowerCase() === 'clear') ? '' : keyInput;
+            }
+
+            msgEl.style.color = '#38bdf8';
+            msgEl.textContent = 'Saving settings to config.json...';
+
+            try {
+                const res = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const updated = await res.json();
+                msgEl.style.color = '#10b981';
+                msgEl.textContent = 'Configuration saved successfully!';
+                loadSettingsIntoModal(updated);
+                await fetchStatus();
+                setTimeout(() => {
+                    closeSettingsModal();
+                }, 1200);
+            } catch (e) {
+                msgEl.style.color = '#ef4444';
+                msgEl.textContent = 'Failed to save settings: ' + e;
             }
         }
 

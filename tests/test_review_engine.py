@@ -288,6 +288,46 @@ class TestReviewEngine(unittest.TestCase):
         self.assertEqual(res["critical_major_count"], 0)
         self.assertEqual(res["minor_count"], 0)
 
+    def test_already_reviewed_detection_via_comment_history(self):
+        real_gh_client = GitHubClient(token="fake-token")
+        # Mock get_reviews_for_pr returning empty (no formal review)
+        real_gh_client.get_reviews_for_pr = MagicMock(return_value=[])
+        # Mock get_comments_for_pr returning existing completed status comment
+        real_gh_client.get_comments_for_pr = MagicMock(return_value=[
+            {
+                "user": {"login": "coderabbit-bot"},
+                "body": """🐰 **Automated CodeRabbit Review Completed**
+- **Reviewer**: @coderabbit-bot
+- **Target Base Branch**: `main`
+- **Head Branch**: `feature-branch` (`112233445566`)
+- **Status**: APPROVED (0 critical/major findings)
+---
+Review complete. Detailed findings submitted directly to this pull request."""
+            }
+        ])
+
+        has_reviewed, outcome = real_gh_client.has_user_reviewed_sha(
+            owner="owner",
+            repo="repo",
+            pr_number=50,
+            commit_sha="1122334455667788",
+            username="coderabbit-bot"
+        )
+        self.assertTrue(has_reviewed)
+        self.assertEqual(outcome, "APPROVED")
+
+    def test_cli_uses_api_key_from_config(self):
+        self.cfg_mgr.set_coderabbit_api_key("test-cr-api-key-999")
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout='{"findings": []}', stderr="")
+            retcode, stdout, stderr = self.engine.execute_coderabbit_cli("/fake/path", "main")
+            self.assertEqual(retcode, 0)
+            mock_run.assert_called_once()
+            call_kwargs = mock_run.call_args[1]
+            self.assertIn("env", call_kwargs)
+            self.assertEqual(call_kwargs["env"].get("CODERABBIT_API_KEY"), "test-cr-api-key-999")
+
 if __name__ == "__main__":
     unittest.main()
+
 

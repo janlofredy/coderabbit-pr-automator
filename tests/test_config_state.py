@@ -137,6 +137,31 @@ class TestConfigAndStateManager(unittest.TestCase):
         mgr.set_strict_approval(True)
         self.assertTrue(mgr.is_strict_approval())
 
+    def test_runtime_settings_update(self):
+        mgr = ConfigManager(config_path=self.config_path, repos_base_dir=self.repos_dir)
+        settings = mgr.get_settings()
+        self.assertEqual(settings["poll_interval_seconds"], 900)
+        self.assertEqual(settings["max_files_limit"], 100)
+        self.assertTrue(settings["auto_approve"])
+        self.assertTrue(settings["strict_approval"])
+        self.assertFalse(settings["has_coderabbit_api_key"])
+
+        # Update settings at runtime
+        updated = mgr.update_settings({
+            "poll_interval_seconds": 300,
+            "max_files_limit": 50,
+            "auto_approve": False,
+            "strict_approval": False,
+            "coderabbit_api_key": "cr-secret-test-key-1234"
+        })
+        self.assertEqual(updated["poll_interval_seconds"], 300)
+        self.assertEqual(updated["max_files_limit"], 50)
+        self.assertFalse(updated["auto_approve"])
+        self.assertFalse(updated["strict_approval"])
+        self.assertTrue(updated["has_coderabbit_api_key"])
+        self.assertEqual(mgr.get_coderabbit_api_key(), "cr-secret-test-key-1234")
+
 if __name__ == "__main__":
     unittest.main()
+
 

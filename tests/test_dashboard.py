@@ -174,6 +174,24 @@ class TestDashboardBackend(unittest.TestCase):
             res = json.loads(resp.read().decode())
             self.assertIn("strict_approval", res)
 
+        # 6. Test GET /api/config
+        with urllib.request.urlopen(f"{base_url}/api/config") as resp:
+            self.assertEqual(resp.status, 200)
+            cfg_res = json.loads(resp.read().decode())
+            self.assertIn("poll_interval_seconds", cfg_res)
+            self.assertIn("max_files_limit", cfg_res)
+            self.assertIn("auto_approve", cfg_res)
+            self.assertIn("strict_approval", cfg_res)
+
+        # 7. Test POST /api/config
+        update_data = json.dumps({"poll_interval_seconds": 600, "max_files_limit": 80}).encode()
+        req = urllib.request.Request(f"{base_url}/api/config", data=update_data, method="POST")
+        with urllib.request.urlopen(req) as resp:
+            self.assertEqual(resp.status, 200)
+            cfg_updated = json.loads(resp.read().decode())
+            self.assertEqual(cfg_updated["poll_interval_seconds"], 600)
+            self.assertEqual(cfg_updated["max_files_limit"], 80)
+
         server.shutdown()
         server.server_close()
 

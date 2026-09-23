@@ -211,6 +211,7 @@ class DashboardBackend:
             annotated_prs.append(item)
 
         return {
+            "config": self.config_manager.get_settings(),
             "service_enabled": config.get("service_enabled", True),
             "strict_approval": config.get("strict_approval", True),
             "last_run": state.get("last_run_timestamp", ""),
@@ -264,6 +265,12 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(data).encode("utf-8"))
             return
 
+        if path == "/api/config":
+            cfg_data = backend.config_manager.get_settings()
+            self._set_headers(200)
+            self.wfile.write(json.dumps(cfg_data).encode("utf-8"))
+            return
+
         if path == "/api/repos":
             repos = backend.config_manager.get_repos()
             self._set_headers(200)
@@ -309,6 +316,12 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             backend.state_manager.clear_rate_limit()
             self._set_headers(200)
             self.wfile.write(json.dumps({"status": "cleared"}).encode("utf-8"))
+            return
+
+        if path == "/api/config" or path == "/api/settings":
+            updated = backend.config_manager.update_settings(data)
+            self._set_headers(200)
+            self.wfile.write(json.dumps(updated).encode("utf-8"))
             return
 
         if path == "/api/service/toggle":

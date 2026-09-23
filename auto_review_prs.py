@@ -139,6 +139,11 @@ class AutoReviewEngine:
         """
         cmd = ["coderabbit", "review", "--agent", "--base", base_ref]
         logger.info("Executing CodeRabbit CLI: %s in %s", " ".join(cmd), repo_path)
+        env = os.environ.copy()
+        api_key = self.config_manager.get_coderabbit_api_key()
+        if api_key:
+            env["CODERABBIT_API_KEY"] = api_key
+
         try:
             res = subprocess.run(
                 cmd,
@@ -146,6 +151,7 @@ class AutoReviewEngine:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                env=env,
                 timeout=self.cli_timeout
             )
             return res.returncode, res.stdout, res.stderr

@@ -14,15 +14,22 @@ git config --global user.name "${GIT_USER_NAME:-CodeRabbit Auto-Reviewer}"
 git config --global user.email "${GIT_USER_EMAIL:-coderabbit-bot@users.noreply.github.com}"
 git config --global init.defaultBranch main
 
-# Authenticate CodeRabbit CLI if API key is provided
+# Authenticate CodeRabbit CLI if API key is provided via env or config.json
+if [ -z "$CODERABBIT_API_KEY" ] && [ -f "/root/.coderabbit/config.json" ]; then
+    CFG_KEY=$(python3 -c "import json; print(json.load(open('/root/.coderabbit/config.json')).get('coderabbit_api_key', ''))" 2>/dev/null || true)
+    if [ -n "$CFG_KEY" ]; then
+        CODERABBIT_API_KEY="$CFG_KEY"
+    fi
+fi
+
 if [ -n "$CODERABBIT_API_KEY" ]; then
-    echo "🔑 Configuring CodeRabbit CLI with CODERABBIT_API_KEY..."
+    echo "🔑 Configuring CodeRabbit CLI with CodeRabbit API Key..."
     export CODERABBIT_API_KEY="$CODERABBIT_API_KEY"
 elif [ -f "/root/.coderabbit/auth.json" ]; then
     echo "🔑 Found mounted CodeRabbit auth at /root/.coderabbit/auth.json"
 else
-    echo "⚠️ Warning: No CODERABBIT_API_KEY or mounted auth.json detected."
-    echo "   Free Tier rate limits and features will apply."
+    echo "ℹ️ Note: No CodeRabbit API key or auth.json detected."
+    echo "   Using CodeRabbit Free Tier defaults (can be added anytime in Web Dashboard)."
 fi
 
 # Authenticate GitHub CLI / git credentials if GITHUB_TOKEN is provided

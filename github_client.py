@@ -88,28 +88,91 @@ class GitHubClient:
         """Retrieves reviews submitted on a pull request."""
         return self._request("GET", f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews")
 
+    def get_comments_for_pr(self, owner: str, repo: str, pr_number: int) -> List[Dict[str, Any]]:
+        """Retrieves conversation issue comments on a pull request."""
+        return self._request("GET", f"/repos/{owner}/{repo}/issues/{pr_number}/comments?per_page=100")
+
     def has_user_reviewed_sha(self, owner: str, repo: str, pr_number: int, commit_sha: str, username: Optional[str] = None) -> Tuple[bool, Optional[str]]:
         """
-        Checks if the specified user has already reviewed the given commit SHA.
+        Checks if the PR has already been reviewed on the given commit SHA based on:
+        1. Formal PR reviews (/pulls/{pr_number}/reviews)
+        2. PR issue comment history (/issues/{pr_number}/comments)
         Returns (has_reviewed, review_state).
         """
         user = username or self.get_username()
-        if not user:
-            return False, None
+        short_sha = commit_sha[:8] if commit_sha else ""
+        short7_sha = commit_sha[:7] if commit_sha else ""
 
-        reviews = self.get_reviews_for_pr(owner, repo, pr_number)
-        for r in reversed(reviews):
-            reviewer = (r.get("user") or {}).get("login", "")
-            r_commit = r.get("commit_id", "")
-            state = r.get("state", "").upper()
-            if reviewer.lower() == user.lower() and r_commit == commit_sha:
-                if state in ("APPROVED", "CHANGES_REQUESTED"):
-                    return True, state
+        # 1. Check formal reviews
+        try:
+            reviews = self.get_reviews_for_pr(owner, repo, pr_number)
+            for r in reversed(reviews):
+                reviewer = (r.get("user") or {}).get("login", "")
+                r_commit = r.get("commit_id", "")
+                state = r.get("state", "").upper()
+                body = r.get("body", "")
+
+                commit_matched = (r_commit == commit_sha) or (short_sha and r_commit.startswith(short_sha))
+                reviewer_matched = bool(user and reviewer.lower() == user.lower())
+
+                if commit_matched and reviewer_matched:
+                    if state in ("APPROVED", "CHANGES_REQUESTED"):
+                        return True, state
+                    elif state == "COMMENTED":
+                        if "🐰" in body or "CodeRabbit" in body:
+                            outcome = "COMMENTED"
+                            if "NEEDS_WORK" in body:
+                                outcome = "NEEDS_WORK (Minor Issues Detected)"
+                            elif "CHANGES_REQUESTED" in body:
+                                outcome = "CHANGES_REQUESTED"
+                            elif "APPROVED" in body:
+                                outcome = "APPROVED"
+                            return True, outcome
+        except Exception as e:
+            logger.warning("Error fetching reviews for %s/%s PR #%s: %s", owner, repo, pr_number, e)
+
+        # 2. Check PR comment history
+        try:
+            comments = self.get_comments_for_pr(owner, repo, pr_number)
+            for comment in reversed(comments):
+                author = (comment.get("user") or {}).get("login", "")
+                body = comment.get("body", "")
+
+                is_bot_author = bool(user and author.lower() == user.lower())
+                is_coderabbit_author = "coderabbit" in author.lower()
+                has_review_signature = (
+                    "🐰 **Automated CodeRabbit Review Completed**" in body or
+                    "🐰 CodeRabbit Automated Review" in body or
+                    "CodeRabbit Review Completed" in body or
+                    "<!-- coderabbit-review-complete -->" in body
+                )
+
+                if is_bot_author or is_coderabbit_author or has_review_signature:
+                    sha_found = (
+                        (commit_sha and commit_sha in body) or
+                        (short_sha and short_sha in body) or
+                        (short7_sha and short7_sha in body)
+                    )
+
+                    if sha_found:
+                        if "Completed" in body or "Review Outcome" in body or "Review complete" in body:
+                            if "NEEDS_WORK" in body:
+                                outcome = "NEEDS_WORK (Minor Issues Detected)"
+                            elif "CHANGES_REQUESTED" in body:
+                                outcome = "CHANGES_REQUESTED"
+                            elif "APPROVED" in body:
+                                outcome = "APPROVED"
+                            else:
+                                outcome = "COMMENTED"
+                            return True, outcome
+        except Exception as e:
+            logger.warning("Error fetching comments for %s/%s PR #%s: %s", owner, repo, pr_number, e)
+
         return False, None
 
     def find_bot_comment(self, owner: str, repo: str, pr_number: int, marker: str = "🐰 **Automated CodeRabbit Review") -> Optional[Dict[str, Any]]:
         """Finds existing bot status comment on an issue/PR to prevent duplicate spam."""
-        comments = self._request("GET", f"/repos/{owner}/{repo}/issues/{pr_number}/comments?per_page=100")
+        comments = self.get_comments_for_pr(owner, repo, pr_number)
         for comment in comments:
             body = comment.get("body", "")
             if marker in body:

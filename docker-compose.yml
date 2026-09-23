@@ -12,13 +12,6 @@ services:
       - "8765:8765"
     environment:
       - GITHUB_TOKEN=${GITHUB_TOKEN}
-      - REPOSITORIES=${REPOSITORIES:-cictd-isds/chrmd-web,cictd-isds/chrmd-api}
-      - POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-900}
-      - MAX_FILES_LIMIT=${MAX_FILES_LIMIT:-100}
-      - AUTO_APPROVE=${AUTO_APPROVE:-true}
-      - STRICT_APPROVAL=${STRICT_APPROVAL:-true}
-      - CODERABBIT_API_KEY=${CODERABBIT_API_KEY:-}
-      - PORT=8765
     volumes:
       - /DATA/AppData/coderabbit/config:/root/.coderabbit
       - /DATA/AppData/coderabbit/reviews:/root/.coderabbit/reviews

@@ -45,6 +45,7 @@ class ConfigManager:
         auto_approve_env = str(auto_approve_val).lower() in ("true", "1", "yes") if auto_approve_val else True
         strict_approval_val = os.getenv("STRICT_APPROVAL", "true")
         strict_approval_env = str(strict_approval_val).lower() in ("true", "1", "yes") if strict_approval_val else True
+        cr_key = os.getenv("CODERABBIT_API_KEY", "").strip()
 
         return {
             "repositories": repo_list,
@@ -52,7 +53,8 @@ class ConfigManager:
             "max_files_limit": max_files,
             "auto_approve": auto_approve_env,
             "strict_approval": strict_approval_env,
-            "service_enabled": True
+            "service_enabled": True,
+            "coderabbit_api_key": cr_key
         }
 
     def ensure_config_exists(self) -> None:
@@ -175,4 +177,69 @@ class ConfigManager:
         cfg["strict_approval"] = bool(strict)
         self.save_config(cfg)
         return cfg["strict_approval"]
+
+    def get_coderabbit_api_key(self) -> str:
+        """Returns the configured CodeRabbit API key (config.json or env fallback)."""
+        cfg = self.load_config()
+        key = cfg.get("coderabbit_api_key", "")
+        if key and str(key).strip():
+            return str(key).strip()
+        return os.getenv("CODERABBIT_API_KEY", "").strip()
+
+    def set_coderabbit_api_key(self, api_key: str) -> None:
+        """Sets the CodeRabbit API key in config.json."""
+        cfg = self.load_config()
+        cfg["coderabbit_api_key"] = str(api_key).strip()
+        self.save_config(cfg)
+
+    def get_settings(self) -> Dict[str, Any]:
+        """Returns runtime service configuration settings."""
+        cfg = self.load_config()
+        key = str(cfg.get("coderabbit_api_key", "") or os.getenv("CODERABBIT_API_KEY", "")).strip()
+        masked = ("••••••••" + key[-4:]) if len(key) >= 8 else ("••••" if key else "")
+        return {
+            "poll_interval_seconds": int(cfg.get("poll_interval_seconds", 900)),
+            "max_files_limit": int(cfg.get("max_files_limit", 100)),
+            "auto_approve": bool(cfg.get("auto_approve", True)),
+            "strict_approval": bool(cfg.get("strict_approval", True)),
+            "service_enabled": bool(cfg.get("service_enabled", True)),
+            "has_coderabbit_api_key": bool(key),
+            "coderabbit_api_key_masked": masked
+        }
+
+    def update_settings(self, updates: Dict[str, Any]) -> Dict[str, Any]:
+        """Atomically updates operational settings in config.json."""
+        cfg = self.load_config()
+        if "poll_interval_seconds" in updates:
+            try:
+                val = int(updates["poll_interval_seconds"])
+                if val >= 10:
+                    cfg["poll_interval_seconds"] = val
+            except (ValueError, TypeError):
+                pass
+
+        if "max_files_limit" in updates:
+            try:
+                val = int(updates["max_files_limit"])
+                if val >= 1:
+                    cfg["max_files_limit"] = val
+            except (ValueError, TypeError):
+                pass
+
+        if "auto_approve" in updates:
+            cfg["auto_approve"] = bool(updates["auto_approve"])
+
+        if "strict_approval" in updates:
+            cfg["strict_approval"] = bool(updates["strict_approval"])
+
+        if "service_enabled" in updates:
+            cfg["service_enabled"] = bool(updates["service_enabled"])
+
+        if "coderabbit_api_key" in updates and updates["coderabbit_api_key"] is not None:
+            # If empty string, user intentionally cleared it; if valid string, update it
+            cfg["coderabbit_api_key"] = str(updates["coderabbit_api_key"]).strip()
+
+        self.save_config(cfg)
+        return self.get_settings()
+
 

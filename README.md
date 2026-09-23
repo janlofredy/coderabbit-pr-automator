@@ -75,16 +75,11 @@ Copy the example environment file:
 ```bash
 cp .env.example .env
 ```
-Edit `.env` with your preferred editor:
+Edit `.env` with your GitHub token:
 ```env
 GITHUB_TOKEN=ghp_yourPersonalAccessTokenHere
-REPOSITORIES=cictd-isds/chrmd-web,cictd-isds/chrmd-api
-POLL_INTERVAL_SECONDS=900
-MAX_FILES_LIMIT=100
-AUTO_APPROVE=true
-CODERABBIT_API_KEY=
-PORT=8765
 ```
+*(All other settings including monitored repositories, scan intervals, limits, and approval policies are managed directly from the Web Dashboard).*
 
 ### 3. Start the Container
 ```bash
@@ -104,7 +99,7 @@ Requires a **GitHub Personal Access Token** (Classic or Fine-Grained) with:
 
 ### 2. CodeRabbit Authentication
 The system supports two headless authentication methods:
-- **API Key**: Set `CODERABBIT_API_KEY` in your `.env` or Compose file.
+- **Web Dashboard / config.json**: Enter your `CODERABBIT_API_KEY` directly inside the **⚙️ Settings** modal in the Web Dashboard. It saves into `/root/.coderabbit/config.json` and takes effect immediately.
 - **Mounted Auth File**: If you have already authenticated CodeRabbit locally on your host machine, mount your `~/.coderabbit/auth.json` into the container volume (`/root/.coderabbit/auth.json`).
 
 ---
@@ -114,16 +109,8 @@ The system supports two headless authentication methods:
 | Variable | Description | Default |
 | :--- | :--- | :--- |
 | `GITHUB_TOKEN` | GitHub Personal Access Token (`repo` scope) | *Required* |
-| `REPOSITORIES` | Comma-separated default repositories to monitor | `cictd-isds/chrmd-web,cictd-isds/chrmd-api` |
-| `POLL_INTERVAL_SECONDS` | Interval between background PR scans | `900` (15 minutes) |
-| `MAX_FILES_LIMIT` | Maximum modified file threshold for reviews | `100` |
-| `AUTO_APPROVE` | Automatically submit `APPROVE` on clean PRs | `true` |
-| `STRICT_APPROVAL` | Strict mode: blocks approval if any minor issue/warning is found | `true` |
-| `CODERABBIT_API_KEY` | Optional CodeRabbit API key | *Empty* |
-| `PORT` | Web dashboard listening port | `8765` |
-| `CONFIG_DIR` | Directory holding `config.json` and state files | `/root/.coderabbit` |
-| `REVIEWS_DIR` | Directory storing generated HTML reports | `/root/.coderabbit/reviews` |
-| `REPOS_DIR` | Directory caching cloned Git repositories | `/app/repos` |
+
+> 💡 **Note**: All other operational configuration (monitored repositories, polling intervals, max file limits, auto-approvals, strict approval mode, and CodeRabbit API keys) is persisted in `config.json` on the mounted storage volume and can be changed live from the Web Dashboard without recreating or restarting the container.
 
 ---
 
@@ -132,6 +119,8 @@ The system supports two headless authentication methods:
 | Endpoint | Method | Description |
 | :--- | :--- | :--- |
 | `/api/status` | `GET` | Returns aggregated status, active rate limits, strict approval mode, and PR list |
+| `/api/config` | `GET` | Returns runtime operational settings (`poll_interval_seconds`, `max_files_limit`, etc.) |
+| `/api/config` | `POST` | Updates runtime operational settings in `config.json` live |
 | `/api/strict-approval/toggle` | `POST` | Toggles strict approval mode on/off |
 | `/api/repos` | `GET` | Lists all configured repositories and their active status |
 | `/api/repos/toggle` | `POST` | Toggles repository state: `{"full_name": "owner/repo"}` |
