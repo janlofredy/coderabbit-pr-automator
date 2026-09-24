@@ -170,6 +170,64 @@ class GitHubClient:
 
         return False, None
 
+    def get_pr_review_summary(self, owner: str, repo: str, pr_number: int, commit_sha: str = "", auth_user: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Inspects all reviews on a PR to detect:
+        1. Whether any reviewer requested changes (and who).
+        2. Whether the current authenticated user/bot has reviewed/approved.
+        3. Overall review states from other reviewers.
+        """
+        user = (auth_user or self.get_username() or "").lower()
+        short_sha = commit_sha[:8] if commit_sha else ""
+
+        other_changes_requested = []
+        other_approved = []
+        user_review_state = None
+        has_user_reviewed = False
+
+        try:
+            reviews = self.get_reviews_for_pr(owner, repo, pr_number)
+            # Track latest review per reviewer
+            latest_by_reviewer: Dict[str, Dict[str, Any]] = {}
+            for r in reviews:
+                reviewer = ((r.get("user") or {}).get("login") or "").strip()
+                if not reviewer:
+                    continue
+                state = (r.get("state") or "").upper()
+                if state in ("APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"):
+                    latest_by_reviewer[reviewer.lower()] = r
+
+            for rev_lower, r in latest_by_reviewer.items():
+                reviewer_login = (r.get("user") or {}).get("login") or rev_lower
+                state = (r.get("state") or "").upper()
+                r_commit = r.get("commit_id", "")
+                commit_matched = bool(not commit_sha or r_commit == commit_sha or (short_sha and r_commit.startswith(short_sha)))
+
+                if user and rev_lower == user:
+                    if commit_matched and state in ("APPROVED", "CHANGES_REQUESTED"):
+                        has_user_reviewed = True
+                        user_review_state = state
+                else:
+                    if state == "CHANGES_REQUESTED":
+                        other_changes_requested.append(reviewer_login)
+                    elif state == "APPROVED":
+                        other_approved.append(reviewer_login)
+
+        except Exception as e:
+            logger.warning("Error inspecting review summary for %s/%s PR #%s: %s", owner, repo, pr_number, e)
+
+        # Fallback for user review via has_user_reviewed_sha if not found in formal reviews
+        if not has_user_reviewed and commit_sha:
+            has_user_reviewed, user_review_state = self.has_user_reviewed_sha(owner, repo, pr_number, commit_sha, username=user)
+
+        return {
+            "has_other_changes_requested": len(other_changes_requested) > 0,
+            "other_changes_requested_by": other_changes_requested,
+            "other_approved_by": other_approved,
+            "has_user_reviewed": has_user_reviewed,
+            "user_review_state": user_review_state
+        }
+
     def find_bot_comment(self, owner: str, repo: str, pr_number: int, marker: str = "🐰 **Automated CodeRabbit Review") -> Optional[Dict[str, Any]]:
         """Finds existing bot status comment on an issue/PR to prevent duplicate spam."""
         comments = self.get_comments_for_pr(owner, repo, pr_number)

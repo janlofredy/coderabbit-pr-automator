@@ -74,6 +74,11 @@ class DashboardBackend:
                 is_own = bool(auth_user and author.lower() == auth_user.lower())
                 head_sha = (pr.get("head") or {}).get("sha", "")
 
+                # Fetch PR review summary (other reviewers' requested changes, user's review)
+                review_summary = self.github_client.get_pr_review_summary(
+                    owner, repo_name, num, commit_sha=head_sha, auth_user=auth_user
+                )
+
                 results.append({
                     "pr_key": pr_key,
                     "repo": full_name,
@@ -86,7 +91,12 @@ class DashboardBackend:
                     "head_sha": head_sha,
                     "html_url": pr.get("html_url", ""),
                     "created_at": pr.get("created_at", ""),
-                    "updated_at": pr.get("updated_at", "")
+                    "updated_at": pr.get("updated_at", ""),
+                    "has_other_changes_requested": review_summary.get("has_other_changes_requested", False),
+                    "other_changes_requested_by": review_summary.get("other_changes_requested_by", []),
+                    "other_approved_by": review_summary.get("other_approved_by", []),
+                    "has_user_reviewed": review_summary.get("has_user_reviewed", False),
+                    "user_review_state": review_summary.get("user_review_state")
                 })
             return results
         except Exception as e:
@@ -178,6 +188,10 @@ class DashboardBackend:
             key = item["pr_key"]
             status_entry = pr_statuses.get(key, {})
 
+            has_other_changes = item.get("has_other_changes_requested", False)
+            other_changers = item.get("other_changes_requested_by", [])
+            changers_str = ", ".join(other_changers) if other_changers else "Reviewer"
+
             # Determine dynamic status badge
             if key in active_reviews:
                 attempt = active_reviews[key].get("attempt", 1)
@@ -191,6 +205,9 @@ class DashboardBackend:
                 item["attempt"] = status_entry.get("attempt", 1)
             elif status_entry.get("status") == "SKIPPED_MAX_FILES":
                 item["status_badge"] = "SKIPPED_MAX_FILES"
+            elif has_other_changes:
+                item["status_badge"] = "OTHER_CHANGES_REQUESTED"
+                item["status_label"] = f"Changes Requested by {changers_str}"
             elif status_entry.get("review_outcome") == "NEEDS_WORK (Minor Issues Detected)":
                 item["status_badge"] = "COMMENTS_POSTED"
                 item["status_label"] = "Needs Work (Minor Issues)"

@@ -593,6 +593,8 @@
                     return { class: 'badge-orange', text: `⏳ Rate Limited (${pr.status_label || 'Retrying'})` };
                 case 'REVIEW_IN_PROGRESS':
                     return { class: 'badge-blue', text: `⚡ Review in Progress (Attempt ${pr.attempt || 1}/3)` };
+                case 'OTHER_CHANGES_REQUESTED':
+                    return { class: 'badge-red', text: `❌ ${pr.status_label || 'Changes Requested'}` };
                 case 'APPROVED':
                     return { class: 'badge-green', text: '✅ Approved by You' };
                 case 'COMMENTS_POSTED':
@@ -621,6 +623,7 @@
             container.innerHTML = prs.map(pr => {
                 const badge = getBadgeInfo(pr);
                 const hasReport = !!pr.report_file;
+                const otherApproved = (pr.other_approved_by || []).length > 0 ? `<span>👍 Approved by: <strong>${escapeHtml(pr.other_approved_by.join(', '))}</strong></span>` : '';
 
                 return `
                 <div class="pr-card">
@@ -634,6 +637,7 @@
                             <span>👤 <strong>${pr.author}</strong></span>
                             <span>🎯 <code>${pr.base_ref}</code> &larr; <code>${pr.head_ref}</code></span>
                             <span>#️⃣ <code>${(pr.head_sha || '').substring(0, 7)}</code></span>
+                            ${otherApproved}
                         </div>
                     </div>
                     <div class="pr-actions">

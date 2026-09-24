@@ -47,6 +47,13 @@ class TestDashboardBackend(unittest.TestCase):
             }
         ]
         self.gh_client.has_user_reviewed_sha.return_value = (False, None)
+        self.gh_client.get_pr_review_summary.return_value = {
+            "has_other_changes_requested": False,
+            "other_changes_requested_by": [],
+            "other_approved_by": [],
+            "has_user_reviewed": False,
+            "user_review_state": None
+        }
 
         self.backend = DashboardBackend(
             config_manager=self.cfg_mgr,
@@ -126,6 +133,22 @@ class TestDashboardBackend(unittest.TestCase):
         self.assertTrue(pr["is_own_pr"])
         self.assertEqual(pr["status_badge"], "OWN_PR")
         self.assertEqual(pr["status_label"], "Your PR (Author)")
+
+    def test_status_badge_other_changes_requested(self):
+        self.gh_client.get_pr_review_summary.return_value = {
+            "has_other_changes_requested": True,
+            "other_changes_requested_by": ["alice", "bob"],
+            "other_approved_by": [],
+            "has_user_reviewed": False,
+            "user_review_state": None
+        }
+        self.backend.refresh_pr_cache()
+        status = self.backend.get_annotated_status()
+        pr = status["pull_requests"][0]
+        self.assertEqual(pr["status_badge"], "OTHER_CHANGES_REQUESTED")
+        self.assertEqual(pr["status_label"], "Changes Requested by alice, bob")
+        self.assertTrue(pr["has_other_changes_requested"])
+        self.assertEqual(pr["other_changes_requested_by"], ["alice", "bob"])
 
     def test_http_endpoints(self):
         import web_dashboard
