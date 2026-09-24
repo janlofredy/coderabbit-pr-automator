@@ -667,18 +667,22 @@
 
                 // Changes requested by others
                 if (pr.has_other_changes_requested && (pr.other_changes_requested_by || []).length > 0) {
-                    pills.push(`<span class="badge badge-red">❌ Changes Requested (${escapeHtml(pr.other_changes_requested_by.join(', '))})</span>`);
+                    (pr.other_changes_requested_by || []).forEach(name => {
+                        pills.push(`<span class="badge badge-red">❌ Changes Requested by ${escapeHtml(name)}</span>`);
+                    });
                 }
 
-                // Commented by others
+                // Commented by each reviewer/person
                 if (pr.has_other_commented && (pr.other_commented_by || []).length > 0) {
-                    pills.push(`<span class="badge badge-yellow">💬 Commented by Others (${escapeHtml(pr.other_commented_by.join(', '))})</span>`);
+                    (pr.other_commented_by || []).forEach(name => {
+                        pills.push(`<span class="badge badge-yellow">💬 Commented by ${escapeHtml(name)}</span>`);
+                    });
                 }
 
-                // Check Error
+                // Check Error - kept short as just "Check Error"
                 if (pr.has_check_error) {
                     const failList = (pr.failed_checks || []).join(', ');
-                    pills.push(`<span class="badge badge-red" title="${escapeHtml(failList)}">⚠️ Check Error${failList ? ` (${escapeHtml(failList)})` : ''}</span>`);
+                    pills.push(`<span class="badge badge-red"${failList ? ` title="${escapeHtml(failList)}"` : ''}>⚠️ Check Error</span>`);
                 }
 
                 // If no specific pills matched and no active status, show pending or comments posted
