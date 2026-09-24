@@ -95,6 +95,12 @@ class DashboardBackend:
                     "has_other_changes_requested": review_summary.get("has_other_changes_requested", False),
                     "other_changes_requested_by": review_summary.get("other_changes_requested_by", []),
                     "other_approved_by": review_summary.get("other_approved_by", []),
+                    "other_commented_by": review_summary.get("other_commented_by", []),
+                    "has_other_commented": review_summary.get("has_other_commented", False),
+                    "has_user_auto_approved": review_summary.get("has_user_auto_approved", False),
+                    "has_user_manually_approved": review_summary.get("has_user_manually_approved", False),
+                    "has_check_error": review_summary.get("has_check_error", False),
+                    "failed_checks": review_summary.get("failed_checks", []),
                     "has_user_reviewed": review_summary.get("has_user_reviewed", False),
                     "user_review_state": review_summary.get("user_review_state")
                 })
@@ -192,6 +198,9 @@ class DashboardBackend:
             other_changers = item.get("other_changes_requested_by", [])
             changers_str = ", ".join(other_changers) if other_changers else "Reviewer"
 
+            is_auto_approved = item.get("has_user_auto_approved", False) or status_entry.get("review_outcome") == "APPROVED" or (status_entry.get("review_state") == "APPROVED" and "CodeRabbit" in str(status_entry.get("review_body", "")))
+            is_manual_approved = item.get("has_user_manually_approved", False)
+
             # Determine dynamic status badge
             if key in active_reviews:
                 attempt = active_reviews[key].get("attempt", 1)
@@ -208,12 +217,15 @@ class DashboardBackend:
             elif has_other_changes:
                 item["status_badge"] = "OTHER_CHANGES_REQUESTED"
                 item["status_label"] = f"Changes Requested by {changers_str}"
+            elif is_auto_approved:
+                item["status_badge"] = "APPROVED"
+                item["status_label"] = "Auto Approved by You"
+            elif is_manual_approved:
+                item["status_badge"] = "MANUALLY_APPROVED"
+                item["status_label"] = "Manually Approved by You"
             elif status_entry.get("review_outcome") == "NEEDS_WORK (Minor Issues Detected)":
                 item["status_badge"] = "COMMENTS_POSTED"
                 item["status_label"] = "Needs Work (Minor Issues)"
-            elif status_entry.get("review_outcome") == "APPROVED" or status_entry.get("review_state") == "APPROVED":
-                item["status_badge"] = "APPROVED"
-                item["status_label"] = "Approved by You"
             elif status_entry.get("status") == "COMPLETED" or status_entry.get("review_state") == "CHANGES_REQUESTED":
                 item["status_badge"] = "COMMENTS_POSTED"
                 item["status_label"] = "Comments Posted"

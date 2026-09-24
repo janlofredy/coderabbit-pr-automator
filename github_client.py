@@ -92,18 +92,41 @@ class GitHubClient:
         """Retrieves conversation issue comments on a pull request."""
         return self._request("GET", f"/repos/{owner}/{repo}/issues/{pr_number}/comments?per_page=100")
 
+    def get_check_runs_summary(self, owner: str, repo: str, commit_sha: str) -> Dict[str, Any]:
+        """
+        Retrieves CI check runs for a commit to detect failures/errors.
+        Returns: { 'has_check_error': bool, 'failed_checks': List[str] }
+        """
+        if not commit_sha:
+            return {"has_check_error": False, "failed_checks": []}
+        try:
+            res = self._request("GET", f"/repos/{owner}/{repo}/commits/{commit_sha}/check-runs")
+            check_runs = res.get("check_runs", []) if isinstance(res, dict) else []
+            failed = []
+            for cr in check_runs:
+                conclusion = (cr.get("conclusion") or "").lower()
+                name = cr.get("name", "Unknown Check")
+                if conclusion in ("failure", "timed_out", "action_required", "cancelled", "startup_failure"):
+                    failed.append(name)
+            return {
+                "has_check_error": len(failed) > 0,
+                "failed_checks": failed
+            }
+        except Exception as e:
+            logger.debug("Could not fetch check-runs for %s/%s@%s: %s", owner, repo, commit_sha[:8], e)
+            return {"has_check_error": False, "failed_checks": []}
+
     def has_user_reviewed_sha(self, owner: str, repo: str, pr_number: int, commit_sha: str, username: Optional[str] = None) -> Tuple[bool, Optional[str]]:
         """
-        Checks if the PR has already been reviewed on the given commit SHA based on:
-        1. Formal PR reviews (/pulls/{pr_number}/reviews)
-        2. PR issue comment history (/issues/{pr_number}/comments)
+        Checks if the PR has already been automatically reviewed by CodeRabbit on the given commit SHA.
         Returns (has_reviewed, review_state).
+        Only returns True for automated CodeRabbit reviews so manual reviews don't prevent automatic review runs.
         """
         user = username or self.get_username()
         short_sha = commit_sha[:8] if commit_sha else ""
         short7_sha = commit_sha[:7] if commit_sha else ""
 
-        # 1. Check formal reviews
+        # 1. Check formal reviews for automated CodeRabbit signature
         try:
             reviews = self.get_reviews_for_pr(owner, repo, pr_number)
             for r in reversed(reviews):
@@ -116,10 +139,11 @@ class GitHubClient:
                 reviewer_matched = bool(user and reviewer.lower() == user.lower())
 
                 if commit_matched and reviewer_matched:
-                    if state in ("APPROVED", "CHANGES_REQUESTED"):
-                        return True, state
-                    elif state == "COMMENTED":
-                        if "🐰" in body or "CodeRabbit" in body:
+                    is_cr_auto = ("🐰" in body) or ("CodeRabbit" in body)
+                    if is_cr_auto:
+                        if state in ("APPROVED", "CHANGES_REQUESTED"):
+                            return True, state
+                        elif state == "COMMENTED":
                             outcome = "COMMENTED"
                             if "NEEDS_WORK" in body:
                                 outcome = "NEEDS_WORK (Minor Issues Detected)"
@@ -131,7 +155,7 @@ class GitHubClient:
         except Exception as e:
             logger.warning("Error fetching reviews for %s/%s PR #%s: %s", owner, repo, pr_number, e)
 
-        # 2. Check PR comment history
+        # 2. Check PR comment history for automated CodeRabbit comments
         try:
             comments = self.get_comments_for_pr(owner, repo, pr_number)
             for comment in reversed(comments):
@@ -172,22 +196,26 @@ class GitHubClient:
 
     def get_pr_review_summary(self, owner: str, repo: str, pr_number: int, commit_sha: str = "", auth_user: Optional[str] = None) -> Dict[str, Any]:
         """
-        Inspects all reviews on a PR to detect:
+        Inspects all reviews, comments, and CI check runs on a PR to detect:
         1. Whether any reviewer requested changes (and who).
-        2. Whether the current authenticated user/bot has reviewed/approved.
-        3. Overall review states from other reviewers.
+        2. Whether the PR is Auto Approved by You (CodeRabbit automated review on current SHA).
+        3. Whether the PR is Manually Approved by you (human GitHub approval without automated signature).
+        4. Whether other reviewers commented on the PR.
+        5. Whether any CI checks have errors/failures.
         """
         user = (auth_user or self.get_username() or "").lower()
         short_sha = commit_sha[:8] if commit_sha else ""
 
         other_changes_requested = []
         other_approved = []
+        other_commented = set()
+        user_auto_approved = False
+        user_manually_approved = False
         user_review_state = None
         has_user_reviewed = False
 
         try:
             reviews = self.get_reviews_for_pr(owner, repo, pr_number)
-            # Track latest review per reviewer
             latest_by_reviewer: Dict[str, Dict[str, Any]] = {}
             for r in reviews:
                 reviewer = ((r.get("user") or {}).get("login") or "").strip()
@@ -201,29 +229,68 @@ class GitHubClient:
                 reviewer_login = (r.get("user") or {}).get("login") or rev_lower
                 state = (r.get("state") or "").upper()
                 r_commit = r.get("commit_id", "")
+                body = r.get("body", "")
                 commit_matched = bool(not commit_sha or r_commit == commit_sha or (short_sha and r_commit.startswith(short_sha)))
+                is_cr_auto = ("🐰" in body) or ("CodeRabbit" in body)
 
                 if user and rev_lower == user:
-                    if commit_matched and state in ("APPROVED", "CHANGES_REQUESTED"):
-                        has_user_reviewed = True
-                        user_review_state = state
+                    if state == "APPROVED":
+                        if is_cr_auto:
+                            if commit_matched:
+                                user_auto_approved = True
+                                has_user_reviewed = True
+                                user_review_state = "APPROVED"
+                        else:
+                            user_manually_approved = True
+                            if not has_user_reviewed:
+                                user_review_state = "APPROVED"
+                    elif state == "CHANGES_REQUESTED":
+                        if commit_matched:
+                            has_user_reviewed = True
+                            user_review_state = "CHANGES_REQUESTED"
                 else:
                     if state == "CHANGES_REQUESTED":
                         other_changes_requested.append(reviewer_login)
                     elif state == "APPROVED":
                         other_approved.append(reviewer_login)
+                    elif state == "COMMENTED":
+                        other_commented.add(reviewer_login)
 
         except Exception as e:
             logger.warning("Error inspecting review summary for %s/%s PR #%s: %s", owner, repo, pr_number, e)
 
-        # Fallback for user review via has_user_reviewed_sha if not found in formal reviews
-        if not has_user_reviewed and commit_sha:
-            has_user_reviewed, user_review_state = self.has_user_reviewed_sha(owner, repo, pr_number, commit_sha, username=user)
+        # Fallback check for automated review in issue comments / has_user_reviewed_sha
+        if not user_auto_approved and commit_sha:
+            has_auto, auto_state = self.has_user_reviewed_sha(owner, repo, pr_number, commit_sha, username=user)
+            if has_auto:
+                has_user_reviewed = True
+                user_review_state = auto_state
+                if auto_state == "APPROVED":
+                    user_auto_approved = True
+
+        # Check for other commenters from PR issue comments
+        try:
+            comments = self.get_comments_for_pr(owner, repo, pr_number)
+            for c in comments:
+                c_user = ((c.get("user") or {}).get("login") or "").strip()
+                if c_user and (not user or c_user.lower() != user) and "coderabbit" not in c_user.lower():
+                    other_commented.add(c_user)
+        except Exception as e:
+            logger.debug("Could not fetch issue comments for PR #%s: %s", pr_number, e)
+
+        # Check CI check runs for errors
+        check_summary = self.get_check_runs_summary(owner, repo, commit_sha) if commit_sha else {"has_check_error": False, "failed_checks": []}
 
         return {
             "has_other_changes_requested": len(other_changes_requested) > 0,
             "other_changes_requested_by": other_changes_requested,
             "other_approved_by": other_approved,
+            "other_commented_by": sorted(list(other_commented)),
+            "has_other_commented": len(other_commented) > 0,
+            "has_user_auto_approved": user_auto_approved,
+            "has_user_manually_approved": user_manually_approved,
+            "has_check_error": check_summary.get("has_check_error", False),
+            "failed_checks": check_summary.get("failed_checks", []),
             "has_user_reviewed": has_user_reviewed,
             "user_review_state": user_review_state
         }

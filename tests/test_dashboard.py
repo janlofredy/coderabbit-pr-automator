@@ -110,8 +110,29 @@ class TestDashboardBackend(unittest.TestCase):
         status = self.backend.get_annotated_status()
         pr = status["pull_requests"][0]
         self.assertEqual(pr["status_badge"], "APPROVED")
-        self.assertEqual(pr["status_label"], "Approved by You")
+        self.assertEqual(pr["status_label"], "Auto Approved by You")
         self.assertEqual(pr["report_file"], "owner_repo1_pr101_abcdef.html")
+
+    def test_status_badge_manually_approved(self):
+        self.gh_client.get_pr_review_summary.return_value = {
+            "has_other_changes_requested": False,
+            "other_changes_requested_by": [],
+            "other_approved_by": [],
+            "other_commented_by": [],
+            "has_other_commented": False,
+            "has_user_auto_approved": False,
+            "has_user_manually_approved": True,
+            "has_check_error": False,
+            "failed_checks": [],
+            "has_user_reviewed": False,
+            "user_review_state": "APPROVED"
+        }
+        self.backend.refresh_pr_cache()
+        status = self.backend.get_annotated_status()
+        pr = status["pull_requests"][0]
+        self.assertEqual(pr["status_badge"], "MANUALLY_APPROVED")
+        self.assertEqual(pr["status_label"], "Manually Approved by You")
+        self.assertTrue(pr["has_user_manually_approved"])
 
     def test_status_badge_own_pr(self):
         # Configure PR where author is the bot

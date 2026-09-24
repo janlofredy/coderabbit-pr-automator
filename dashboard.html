@@ -225,6 +225,16 @@
         .badge-purple { background-color: rgba(139, 92, 246, 0.15); color: #a78bfa; border: 1px solid #8b5cf6; }
         .badge-gray { background-color: rgba(107, 114, 128, 0.15); color: #9ca3af; border: 1px solid #6b7280; }
 
+        .badge-base {
+            background-color: rgba(99, 102, 241, 0.15);
+            color: #818cf8;
+            border: 1px solid #6366f1;
+            font-size: 0.72rem;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            text-transform: none;
+            letter-spacing: normal;
+        }
+
         .pr-title {
             font-size: 1.05rem;
             font-weight: 600;
@@ -244,9 +254,17 @@
             gap: 0.75rem;
             font-size: 0.8rem;
             color: var(--text-muted);
-            margin-bottom: 1.25rem;
+            margin-bottom: 0.75rem;
             padding-bottom: 0.75rem;
             border-bottom: 1px solid #1f2937;
+        }
+
+        .pr-status-pills {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            align-items: center;
+            margin-bottom: 1.25rem;
         }
 
         .pr-actions {
@@ -621,23 +639,73 @@
             }
 
             container.innerHTML = prs.map(pr => {
-                const badge = getBadgeInfo(pr);
                 const hasReport = !!pr.report_file;
                 const otherApproved = (pr.other_approved_by || []).length > 0 ? `<span>👍 Approved by: <strong>${escapeHtml(pr.other_approved_by.join(', '))}</strong></span>` : '';
+
+                // Generate status pills
+                const pills = [];
+
+                if (pr.status_badge === 'RATE_LIMITED') {
+                    pills.push(`<span class="badge badge-orange">⏳ Rate Limited (${escapeHtml(pr.status_label || 'Retrying')})</span>`);
+                } else if (pr.status_badge === 'REVIEW_IN_PROGRESS') {
+                    pills.push(`<span class="badge badge-blue">⚡ Review in Progress (Attempt ${pr.attempt || 1}/3)</span>`);
+                } else if (pr.status_badge === 'SKIPPED_MAX_FILES') {
+                    pills.push(`<span class="badge badge-red">🛑 Skipped (>100 Files)</span>`);
+                } else if (pr.status_badge === 'OWN_PR') {
+                    pills.push(`<span class="badge badge-purple">👤 Your PR (Author)</span>`);
+                }
+
+                // Auto Approved by You
+                if (pr.has_user_auto_approved || pr.status_badge === 'APPROVED') {
+                    pills.push(`<span class="badge badge-green">🤖 Auto Approved by You</span>`);
+                }
+
+                // Manually Approved by you
+                if (pr.has_user_manually_approved || pr.status_badge === 'MANUALLY_APPROVED') {
+                    pills.push(`<span class="badge badge-blue">👤 Manually Approved by you</span>`);
+                }
+
+                // Changes requested by others
+                if (pr.has_other_changes_requested && (pr.other_changes_requested_by || []).length > 0) {
+                    pills.push(`<span class="badge badge-red">❌ Changes Requested (${escapeHtml(pr.other_changes_requested_by.join(', '))})</span>`);
+                }
+
+                // Commented by others
+                if (pr.has_other_commented && (pr.other_commented_by || []).length > 0) {
+                    pills.push(`<span class="badge badge-yellow">💬 Commented by Others (${escapeHtml(pr.other_commented_by.join(', '))})</span>`);
+                }
+
+                // Check Error
+                if (pr.has_check_error) {
+                    const failList = (pr.failed_checks || []).join(', ');
+                    pills.push(`<span class="badge badge-red" title="${escapeHtml(failList)}">⚠️ Check Error${failList ? ` (${escapeHtml(failList)})` : ''}</span>`);
+                }
+
+                // If no specific pills matched and no active status, show pending or comments posted
+                if (pills.length === 0) {
+                    if (pr.status_badge === 'COMMENTS_POSTED') {
+                        pills.push(`<span class="badge badge-yellow">💬 Comments Posted</span>`);
+                    } else {
+                        pills.push(`<span class="badge badge-gray">⏳ Pending Review</span>`);
+                    }
+                }
 
                 return `
                 <div class="pr-card">
                     <div>
                         <div class="pr-card-header">
-                            <span class="repo-badge">${pr.repo} #${pr.number}</span>
-                            <span class="badge ${badge.class}">${badge.text}</span>
+                            <span class="repo-badge">${escapeHtml(pr.repo)} #${pr.number}</span>
+                            <span class="badge badge-base" title="Base branch: ${escapeHtml(pr.base_ref)}">🎯 base: ${escapeHtml(pr.base_ref)}</span>
                         </div>
                         <a href="${pr.html_url}" target="_blank" class="pr-title">${escapeHtml(pr.title)}</a>
                         <div class="pr-meta">
-                            <span>👤 <strong>${pr.author}</strong></span>
-                            <span>🎯 <code>${pr.base_ref}</code> &larr; <code>${pr.head_ref}</code></span>
+                            <span>👤 <strong>${escapeHtml(pr.author)}</strong></span>
+                            <span>🌱 <code>${escapeHtml(pr.head_ref)}</code></span>
                             <span>#️⃣ <code>${(pr.head_sha || '').substring(0, 7)}</code></span>
                             ${otherApproved}
+                        </div>
+                        <div class="pr-status-pills">
+                            ${pills.join('')}
                         </div>
                     </div>
                     <div class="pr-actions">
