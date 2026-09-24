@@ -351,7 +351,7 @@
             <button class="btn btn-sm" onclick="openRepoModal()">📁 Repositories</button>
             <button id="btn-toggle-service" class="btn btn-sm" onclick="toggleService()">Pause Service</button>
             <button class="btn btn-primary btn-sm" onclick="triggerScan(false)">▶ Run Scan Now</button>
-            <button class="btn btn-sm" onclick="fetchStatus()">🔄 Refresh</button>
+            <button id="btn-refresh" class="btn btn-sm" onclick="refreshLatestPRs()">🔄 Refresh</button>
         </div>
     </header>
 
@@ -386,7 +386,6 @@
 
         <div class="section-header">
             <h2 class="section-title">Open Pull Requests</h2>
-            <div style="font-size: 0.85rem; color: var(--text-muted);">Auto-refreshes every 5s</div>
         </div>
 
         <div id="pr-container" class="pr-grid">
@@ -489,6 +488,29 @@
                 renderDashboard(data);
             } catch (err) {
                 console.error("Failed to load status:", err);
+            }
+        }
+
+        async function refreshLatestPRs() {
+            const btn = document.getElementById('btn-refresh');
+            const originalText = btn ? btn.innerHTML : '🔄 Refresh';
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '⏳ Fetching PRs...';
+            }
+            try {
+                const res = await fetch('/api/status?force_refresh=true');
+                const data = await res.json();
+                currentStatus = data;
+                renderDashboard(data);
+            } catch (err) {
+                console.error("Failed to fetch latest PR details:", err);
+                alert("Failed to fetch latest PR details: " + err);
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = originalText;
+                }
             }
         }
 

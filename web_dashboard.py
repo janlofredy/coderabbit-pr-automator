@@ -289,6 +289,9 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 return
 
         if path == "/api/status":
+            query_params = parse_qs(parsed.query)
+            if query_params.get("force_refresh", [""])[0].lower() in ("true", "1", "yes"):
+                backend.refresh_pr_cache()
             data = backend.get_annotated_status()
             self._set_headers(200)
             self.wfile.write(json.dumps(data).encode("utf-8"))
