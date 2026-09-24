@@ -3,6 +3,7 @@ import json
 import time
 import threading
 import logging
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
@@ -238,6 +239,28 @@ class DashboardBackend:
 
             item["report_file"] = status_entry.get("report_file", "")
             annotated_prs.append(item)
+
+        # Sort PRs: Main > Staging > Develop > others, then by creation date descending
+        def get_bucket(p):
+            b = (p.get("base_ref") or "").strip().lower()
+            if b in ("main", "master"): return 0
+            if b == "staging": return 1
+            if b in ("develop", "dev"): return 2
+            return 3
+
+        def get_created_timestamp(p):
+            created_str = p.get("created_at") or ""
+            if not created_str:
+                return 0.0
+            try:
+                return datetime.fromisoformat(created_str.replace("Z", "+00:00")).timestamp()
+            except Exception:
+                return 0.0
+
+        annotated_prs.sort(key=lambda p: (
+            get_bucket(p),
+            -get_created_timestamp(p)
+        ))
 
         return {
             "config": self.config_manager.get_settings(),

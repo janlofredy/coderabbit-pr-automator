@@ -255,6 +255,20 @@ class TestDashboardBackend(unittest.TestCase):
         self.assertEqual(pr["status_badge"], "COMMENTS_POSTED")
         self.assertEqual(pr["status_label"], "Needs Work (Minor Issues)")
 
+    def test_pr_sorting_base_branch_and_creation(self):
+        self.gh_client.list_open_prs.return_value = [
+            {"number": 1, "title": "Old Dev PR", "base": {"ref": "develop"}, "head": {"ref": "f1", "sha": "111"}, "created_at": "2026-09-20T10:00:00Z"},
+            {"number": 2, "title": "New Dev PR", "base": {"ref": "develop"}, "head": {"ref": "f2", "sha": "222"}, "created_at": "2026-09-22T10:00:00Z"},
+            {"number": 3, "title": "Staging PR", "base": {"ref": "staging"}, "head": {"ref": "f3", "sha": "333"}, "created_at": "2026-09-21T10:00:00Z"},
+            {"number": 4, "title": "Main PR", "base": {"ref": "main"}, "head": {"ref": "f4", "sha": "444"}, "created_at": "2026-09-21T08:00:00Z"},
+            {"number": 5, "title": "Feature base PR", "base": {"ref": "custom-feature"}, "head": {"ref": "f5", "sha": "555"}, "created_at": "2026-09-23T10:00:00Z"},
+        ]
+        self.backend.refresh_pr_cache()
+        status = self.backend.get_annotated_status()
+        pr_nums = [p["number"] for p in status["pull_requests"]]
+        # Expected: Main (4) -> Staging (3) -> New Dev (2) -> Old Dev (1) -> Custom (5)
+        self.assertEqual(pr_nums, [4, 3, 2, 1, 5])
+
 if __name__ == "__main__":
     unittest.main()
 

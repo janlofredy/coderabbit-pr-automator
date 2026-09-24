@@ -694,12 +694,14 @@
                     }
                 }
 
+                const baseBranchUpper = (pr.base_ref || '').trim().toUpperCase();
+
                 return `
                 <div class="pr-card">
                     <div>
                         <div class="pr-card-header">
                             <span class="repo-badge">${escapeHtml(pr.repo)} #${pr.number}</span>
-                            <span class="badge badge-base" title="Base branch: ${escapeHtml(pr.base_ref)}">🎯 base: ${escapeHtml(pr.base_ref)}</span>
+                            <span class="badge badge-base" title="Target base branch: ${escapeHtml(pr.base_ref)}">🎯 ${escapeHtml(baseBranchUpper)}</span>
                         </div>
                         <a href="${pr.html_url}" target="_blank" class="pr-title">${escapeHtml(pr.title)}</a>
                         <div class="pr-meta">
