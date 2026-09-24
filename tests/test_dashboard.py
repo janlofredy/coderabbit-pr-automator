@@ -269,6 +269,28 @@ class TestDashboardBackend(unittest.TestCase):
         # Expected: Main (4) -> Staging (3) -> New Dev (2) -> Old Dev (1) -> Custom (5)
         self.assertEqual(pr_nums, [4, 3, 2, 1, 5])
 
+    def test_pr_merge_conflict(self):
+        self.gh_client.get_pr_review_summary.return_value = {
+            "has_other_changes_requested": False,
+            "other_changes_requested_by": [],
+            "other_approved_by": [],
+            "other_commented_by": [],
+            "has_other_commented": False,
+            "has_user_auto_approved": False,
+            "has_user_manually_approved": False,
+            "has_check_error": False,
+            "failed_checks": [],
+            "has_conflict": True,
+            "mergeable_state": "dirty",
+            "has_user_reviewed": False,
+            "user_review_state": None
+        }
+        self.backend.refresh_pr_cache()
+        status = self.backend.get_annotated_status()
+        pr = status["pull_requests"][0]
+        self.assertTrue(pr["has_conflict"])
+        self.assertEqual(pr["mergeable_state"], "dirty")
+
 if __name__ == "__main__":
     unittest.main()
 

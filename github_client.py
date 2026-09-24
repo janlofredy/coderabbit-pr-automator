@@ -116,6 +116,26 @@ class GitHubClient:
             logger.debug("Could not fetch check-runs for %s/%s@%s: %s", owner, repo, commit_sha[:8], e)
             return {"has_check_error": False, "failed_checks": []}
 
+    def get_pr_mergeable_status(self, owner: str, repo: str, pr_number: int) -> Dict[str, Any]:
+        """
+        Retrieves mergeable status for a pull request.
+        Returns: { 'has_conflict': bool, 'mergeable_state': str }
+        """
+        try:
+            pr = self.get_pr(owner, repo, pr_number)
+            mergeable = pr.get("mergeable")
+            mergeable_state = (pr.get("mergeable_state") or "").lower()
+
+            # mergeable is False or mergeable_state is dirty/conflicting
+            has_conflict = (mergeable is False) or (mergeable_state in ("dirty", "conflicting"))
+            return {
+                "has_conflict": has_conflict,
+                "mergeable_state": mergeable_state
+            }
+        except Exception as e:
+            logger.debug("Could not fetch mergeable status for %s/%s PR #%s: %s", owner, repo, pr_number, e)
+            return {"has_conflict": False, "mergeable_state": "unknown"}
+
     def has_user_reviewed_sha(self, owner: str, repo: str, pr_number: int, commit_sha: str, username: Optional[str] = None) -> Tuple[bool, Optional[str]]:
         """
         Checks if the PR has already been automatically reviewed by CodeRabbit on the given commit SHA.
@@ -281,6 +301,9 @@ class GitHubClient:
         # Check CI check runs for errors
         check_summary = self.get_check_runs_summary(owner, repo, commit_sha) if commit_sha else {"has_check_error": False, "failed_checks": []}
 
+        # Check merge conflict status
+        conflict_summary = self.get_pr_mergeable_status(owner, repo, pr_number)
+
         return {
             "has_other_changes_requested": len(other_changes_requested) > 0,
             "other_changes_requested_by": other_changes_requested,
@@ -291,6 +314,8 @@ class GitHubClient:
             "has_user_manually_approved": user_manually_approved,
             "has_check_error": check_summary.get("has_check_error", False),
             "failed_checks": check_summary.get("failed_checks", []),
+            "has_conflict": conflict_summary.get("has_conflict", False),
+            "mergeable_state": conflict_summary.get("mergeable_state", "unknown"),
             "has_user_reviewed": has_user_reviewed,
             "user_review_state": user_review_state
         }

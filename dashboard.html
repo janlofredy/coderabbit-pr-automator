@@ -685,6 +685,11 @@
                     pills.push(`<span class="badge badge-red"${failList ? ` title="${escapeHtml(failList)}"` : ''}>⚠️ Check Error</span>`);
                 }
 
+                // Merge Conflict
+                if (pr.has_conflict) {
+                    pills.push(`<span class="badge badge-red" title="This pull request has merge conflicts that must be resolved">⚠️ Merge Conflict</span>`);
+                }
+
                 // If no specific pills matched and no active status, show pending or comments posted
                 if (pills.length === 0) {
                     if (pr.status_badge === 'COMMENTS_POSTED') {

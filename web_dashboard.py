@@ -102,6 +102,8 @@ class DashboardBackend:
                     "has_user_manually_approved": review_summary.get("has_user_manually_approved", False),
                     "has_check_error": review_summary.get("has_check_error", False),
                     "failed_checks": review_summary.get("failed_checks", []),
+                    "has_conflict": review_summary.get("has_conflict", False),
+                    "mergeable_state": review_summary.get("mergeable_state", "unknown"),
                     "has_user_reviewed": review_summary.get("has_user_reviewed", False),
                     "user_review_state": review_summary.get("user_review_state")
                 })
