@@ -44,21 +44,18 @@ A headless, continuous CI/CD background automation service and real-time Web Das
 
 ---
 
-## 🏠 CasaOS Setup (1-Click Import)
+## 🏠 CasaOS Setup (1-to-1 Copy & Paste Import)
 
-CasaOS makes deploying Docker apps seamless. Follow these steps:
+Deploying to CasaOS is a single copy-paste operation:
 
-1. Open your **CasaOS Web UI**.
+1. Open your **CasaOS Web UI** (e.g. `http://<your-server-ip>:8080`).
 2. Click the **App Store** icon.
 3. In the top-right corner of the App Store, click **Custom Install**.
 4. Click **Import** in the top-right corner of the modal.
-5. Copy the contents of [`docker-compose.yml`](docker-compose.yml) and paste it into the text area, then click **Submit**.
-6. In the configuration form:
-   - Enter your `GITHUB_TOKEN` under **Environment Variables**.
-   - (Optional) Enter your `CODERABBIT_API_KEY` or leave blank if mounting `~/.coderabbit/auth.json`.
-   - Update `REPOSITORIES` to your comma-separated repository list.
+5. Copy and paste the complete contents of [`casaos-compose.yml`](casaos-compose.yml) into the box.
+6. Replace `YOUR_GITHUB_TOKEN_HERE` with your GitHub Personal Access Token (classic with `repo` scope or fine-grained token).
 7. Click **Install**.
-8. Once installed, click the **CodeRabbit Auto-Reviewer** icon on your CasaOS dashboard to open the Web UI at `http://<casaos-ip>:8765`.
+8. Once installed, the **CodeRabbit Auto-Reviewer** tile appears on your CasaOS dashboard with the official icon and opens directly to `http://<casaos-ip>:8765`.
 
 ---
 

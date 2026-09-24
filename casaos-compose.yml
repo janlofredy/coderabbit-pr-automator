@@ -1,0 +1,32 @@
+name: coderabbit-auto-review
+
+services:
+  coderabbit-pr-automator:
+    image: ghcr.io/janlofredy/coderabbit-pr-automator:latest
+    container_name: coderabbit-pr-automator
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    environment:
+      - GITHUB_TOKEN=YOUR_GITHUB_TOKEN_HERE
+    volumes:
+      - /DATA/AppData/coderabbit/config:/root/.coderabbit
+      - /DATA/AppData/coderabbit/reviews:/root/.coderabbit/reviews
+      - /DATA/AppData/coderabbit/repos:/app/repos
+
+x-casaos:
+  main: coderabbit-pr-automator
+  icon: "https://cdn.jsdelivr.net/gh/janlofredy/coderabbit-pr-automator@main/assets/icon.png"
+  thumbnail: "https://cdn.jsdelivr.net/gh/janlofredy/coderabbit-pr-automator@main/assets/icon.png"
+  port_map: "8765"
+  scheme: "http"
+  index: "/"
+  title:
+    en_us: "CodeRabbit Auto-Reviewer"
+  tagline:
+    en_us: "Automated AI code reviews for GitHub PRs using CodeRabbit CLI"
+  description:
+    en_us: "Headless continuous CI/CD background review service and real-time Web Dashboard that monitors GitHub repositories, performs AI code reviews via CodeRabbit CLI, posts per-file inline comments, handles Free Tier rate limits, and automatically approves clean PRs."
+  developer: "CodeRabbit"
+  author: "janlofredy"
+  category: "Development"
