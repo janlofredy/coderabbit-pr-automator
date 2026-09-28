@@ -138,6 +138,19 @@ class AutoReviewEngine:
         Returns: (returncode, stdout, stderr)
         """
         cmd = ["coderabbit", "review", "--agent", "--base", base_ref]
+
+        # Look for .coderabbit.yaml config in the app directory or repo
+        config_paths = [
+            "/app/.coderabbit.yaml",
+            os.path.join(repo_path, ".coderabbit.yaml"),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), ".coderabbit.yaml"),
+        ]
+        for cfg_path in config_paths:
+            if os.path.isfile(cfg_path):
+                cmd.extend(["--config", cfg_path])
+                logger.info("Using CodeRabbit config: %s", cfg_path)
+                break
+
         logger.info("Executing CodeRabbit CLI: %s in %s", " ".join(cmd), repo_path)
         env = os.environ.copy()
         api_key = self.config_manager.get_coderabbit_api_key()
@@ -165,14 +178,20 @@ class AutoReviewEngine:
     def parse_coderabbit_output(self, stdout: str) -> Dict[str, Any]:
         """Parses structured JSON from CodeRabbit agent output."""
         if not stdout.strip():
+            logger.warning("CodeRabbit CLI returned empty stdout - no review output produced")
             return {"findings": [], "summary": "No output from CodeRabbit CLI", "raw": ""}
 
         # Attempt direct JSON parse
         try:
             data = json.loads(stdout.strip())
             if isinstance(data, dict):
+                findings_count = len(data.get("findings", []))
+                logger.info("Parsed CodeRabbit JSON output: %d findings", findings_count)
+                if findings_count == 0:
+                    logger.warning("CodeRabbit returned valid JSON but 0 findings. Raw output length: %d chars", len(stdout))
                 return data
             elif isinstance(data, list):
+                logger.info("Parsed CodeRabbit JSON array output: %d items", len(data))
                 return {"findings": data, "summary": "CodeRabbit review completed"}
         except json.JSONDecodeError:
             pass
@@ -183,12 +202,17 @@ class AutoReviewEngine:
             try:
                 data = json.loads(json_match.group(1))
                 if isinstance(data, dict):
+                    findings_count = len(data.get("findings", []))
+                    logger.info("Extracted CodeRabbit JSON from text: %d findings", findings_count)
                     return data
                 elif isinstance(data, list):
+                    logger.info("Extracted CodeRabbit JSON array from text: %d items", len(data))
                     return {"findings": data, "summary": "CodeRabbit review completed"}
             except Exception:
                 pass
 
+        logger.warning("Could not parse CodeRabbit output as JSON. Raw stdout (%d chars): %s",
+                       len(stdout), stdout[:300])
         return {
             "findings": [],
             "summary": stdout.strip(),
@@ -513,6 +537,19 @@ class AutoReviewEngine:
                     pass
 
         # Determine Review Event
+        suspicious_review = (
+            len(findings_list) == 0
+            and elapsed < 5.0
+            and file_count > 10
+        )
+        if suspicious_review:
+            logger.warning(
+                "Suspicious review for %s: 0 findings in %.1fs on %d files. "
+                "CodeRabbit CLI may not be producing real analysis. "
+                "Downgrading from APPROVE to COMMENT.",
+                pr_key, elapsed, file_count
+            )
+
         if critical_major_count > 0:
             if is_own_pr:
                 # Self-Approval / Request Changes Prevention Guard on own PR
@@ -525,6 +562,10 @@ class AutoReviewEngine:
             # Strict mode: any minor issue prevents approval
             event = "COMMENT"
             review_outcome = "NEEDS_WORK (Minor Issues Detected)"
+        elif suspicious_review:
+            # Safety net: don't auto-approve if review seems ineffective
+            event = "COMMENT"
+            review_outcome = "REVIEW_INCONCLUSIVE"
         else:
             if auto_approve and not is_own_pr:
                 event = "APPROVE"
@@ -546,6 +587,15 @@ class AutoReviewEngine:
         )
 
         # Build GitHub review body
+        suspicious_note = ""
+        if suspicious_review:
+            suspicious_note = (
+                "\n> ⚠️ **Review Inconclusive**: CodeRabbit CLI completed in "
+                f"{elapsed:.1f}s with 0 findings on {file_count} files. "
+                "The review may not have performed full analysis. "
+                "Auto-approval has been withheld.\n"
+            )
+
         review_body = f"""## 🐰 CodeRabbit Automated Review
 
 - **Review Outcome**: `{review_outcome}`
@@ -554,10 +604,9 @@ class AutoReviewEngine:
 - **Minor / Warning Issues**: {minor_count}
 - **Total Findings**: {len(findings_list)}
 - **Execution Time**: {elapsed:.1f}s
-
+{suspicious_note}
 {summary_text}
 """
-        # Submit GitHub PR Review
         try:
             self.github_client.submit_pull_request_review(
                 owner=owner,

@@ -1,0 +1,27 @@
+# CodeRabbit Review Configuration
+# Profile: "assertive" for comprehensive, strict reviews (nitpick mode)
+# Docs: https://docs.coderabbit.ai/configuration/
+
+language: "en-US"
+
+reviews:
+  profile: "assertive"
+  request_changes_workflow: true
+  high_level_summary: true
+  auto_review:
+    enabled: true
+  path_filters:
+    - "!**/dist/**"
+    - "!**/node_modules/**"
+    - "!**/vendor/**"
+    - "!**/*.min.js"
+    - "!**/*.min.css"
+    - "!**/package-lock.json"
+    - "!**/yarn.lock"
+    - "!**/composer.lock"
+  tone_instructions: >
+    Be extremely thorough and strict. Flag all issues including minor style
+    problems, potential bugs, security concerns, performance issues, and
+    code quality improvements. Point out missing error handling, type safety
+    issues, dead code, duplicated logic, and naming inconsistencies. Leave
+    no issue unreported regardless of severity. When in doubt, report it.
