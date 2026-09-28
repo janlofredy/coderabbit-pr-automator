@@ -161,7 +161,39 @@ class TestConfigAndStateManager(unittest.TestCase):
         self.assertTrue(updated["has_coderabbit_api_key"])
         self.assertEqual(mgr.get_coderabbit_api_key(), "cr-secret-test-key-1234")
 
+    def test_pr_logs_persistence(self):
+        sm = StateManager(state_path=self.state_path)
+        pr_key = "owner/repo#42"
+
+        # Record 2 logs
+        log_id1 = sm.record_pr_log(pr_key, {
+            "status": "COMPLETED",
+            "review_outcome": "APPROVED",
+            "stdout": "cli output 1",
+            "stderr": ""
+        })
+        log_id2 = sm.record_pr_log(pr_key, {
+            "status": "ERROR",
+            "review_outcome": "ERROR",
+            "stdout": "",
+            "stderr": "cli error trace"
+        })
+
+        logs = sm.get_pr_logs(pr_key)
+        self.assertEqual(len(logs), 2)
+        # Most recent first
+        self.assertEqual(logs[0]["log_id"], log_id2)
+        self.assertEqual(logs[0]["review_outcome"], "ERROR")
+        self.assertEqual(logs[1]["log_id"], log_id1)
+        self.assertEqual(logs[1]["review_outcome"], "APPROVED")
+
+        # By id lookup
+        fetched = sm.get_pr_log_by_id(pr_key, log_id1)
+        self.assertIsNotNone(fetched)
+        self.assertEqual(fetched["stdout"], "cli output 1")
+
 if __name__ == "__main__":
     unittest.main()
+
 
 

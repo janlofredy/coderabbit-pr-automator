@@ -1,0 +1,942 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pull Request Details & Logs - CodeRabbit PR Automator</title>
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0b0f19;
+            --surface-color: #111827;
+            --surface-hover: #1f2937;
+            --surface-subtle: #0d1322;
+            --border-color: #1f2937;
+            --border-highlight: #374151;
+            --text-color: #f9fafb;
+            --text-muted: #9ca3af;
+            --primary: #3b82f6;
+            --primary-hover: #2563eb;
+            --green: #10b981;
+            --red: #ef4444;
+            --yellow: #f59e0b;
+            --orange: #f97316;
+            --purple: #8b5cf6;
+            --cyan: #06b6d4;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            line-height: 1.5;
+        }
+
+        header {
+            background-color: var(--surface-color);
+            border-bottom: 1px solid var(--border-color);
+            padding: 1rem 2rem;
+            position: sticky;
+            top: 0;
+            z-index: 40;
+        }
+
+        .header-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .logo {
+            font-weight: 700;
+            font-size: 1.15rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--text-color);
+            text-decoration: none;
+        }
+
+        .nav-back-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.4rem 0.85rem;
+            border-radius: 6px;
+            background: var(--surface-hover);
+            color: var(--text-color);
+            text-decoration: none;
+            font-size: 0.85rem;
+            font-weight: 500;
+            border: 1px solid var(--border-color);
+            transition: all 0.15s ease;
+        }
+
+        .nav-back-btn:hover {
+            border-color: var(--primary);
+            color: #fff;
+        }
+
+        main {
+            flex: 1;
+            padding: 2rem;
+            max-width: 1400px;
+            margin: 0 auto;
+            width: 100%;
+        }
+
+        .breadcrumb {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-bottom: 1rem;
+        }
+
+        .breadcrumb a {
+            color: var(--primary);
+            text-decoration: none;
+        }
+
+        .breadcrumb a:hover {
+            text-decoration: underline;
+        }
+
+        .pr-header-card {
+            background: var(--surface-color);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .pr-title-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .pr-title-group {
+            flex: 1;
+            min-width: 300px;
+        }
+
+        .pr-title {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--text-color);
+            margin-bottom: 0.5rem;
+            line-height: 1.3;
+        }
+
+        .pr-meta-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            align-items: center;
+        }
+
+        .pr-meta-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+        }
+
+        .pr-meta-item code {
+            font-family: 'JetBrains Mono', monospace;
+            background: #1e293b;
+            padding: 0.15rem 0.4rem;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            color: #cbd5e1;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            padding: 0.25rem 0.65rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        .badge-green { background-color: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
+        .badge-red { background-color: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+        .badge-yellow { background-color: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
+        .badge-blue { background-color: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); }
+        .badge-orange { background-color: rgba(249, 115, 22, 0.15); color: #fb923c; border: 1px solid rgba(249, 115, 22, 0.3); }
+        .badge-purple { background-color: rgba(139, 92, 246, 0.15); color: #a78bfa; border: 1px solid rgba(139, 92, 246, 0.3); }
+        .badge-gray { background-color: rgba(156, 163, 175, 0.15); color: #9ca3af; border: 1px solid rgba(156, 163, 175, 0.3); }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            font-weight: 500;
+            font-size: 0.85rem;
+            cursor: pointer;
+            border: 1px solid transparent;
+            transition: all 0.2s ease;
+            text-decoration: none;
+            background-color: var(--surface-hover);
+            color: var(--text-color);
+        }
+
+        .btn:hover:not(:disabled) {
+            background-color: #374151;
+        }
+
+        .btn-primary {
+            background-color: var(--primary);
+            color: white;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background-color: var(--primary-hover);
+        }
+
+        .btn-warning {
+            background-color: rgba(245, 158, 11, 0.2);
+            color: #fbbf24;
+            border-color: rgba(245, 158, 11, 0.4);
+        }
+
+        .btn-warning:hover:not(:disabled) {
+            background-color: rgba(245, 158, 11, 0.3);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-spinner {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            border-top-color: #ffffff;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Stats Row */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .stat-card {
+            background-color: var(--surface-color);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1rem 1.25rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+
+        .stat-title {
+            color: var(--text-muted);
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .stat-val {
+            font-size: 1.5rem;
+            font-weight: 700;
+        }
+
+        /* Two column layout: Runs History & Main Log View */
+        .details-grid {
+            display: grid;
+            grid-template-columns: 280px 1fr;
+            gap: 1.5rem;
+            align-items: start;
+        }
+
+        @media (max-width: 960px) {
+            .details-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .runs-sidebar {
+            background: var(--surface-color);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+
+        .sidebar-title {
+            font-size: 0.9rem;
+            font-weight: 700;
+            color: var(--text-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .runs-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+
+        .run-item {
+            padding: 0.75rem;
+            border-radius: 6px;
+            background: var(--surface-subtle);
+            border: 1px solid var(--border-color);
+            cursor: pointer;
+            transition: all 0.15s ease;
+            display: flex;
+            flex-direction: column;
+            gap: 0.35rem;
+        }
+
+        .run-item:hover {
+            border-color: var(--primary);
+            background: #1e293b;
+        }
+
+        .run-item.active {
+            border-color: var(--primary);
+            background: rgba(59, 130, 246, 0.1);
+        }
+
+        .run-item-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .run-time {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        .run-item-details {
+            font-size: 0.8rem;
+            display: flex;
+            justify-content: space-between;
+            color: var(--text-color);
+        }
+
+        .log-content-area {
+            background: var(--surface-color);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+            min-width: 0;
+        }
+
+        .section-heading {
+            font-size: 1.1rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.5rem;
+        }
+
+        .summary-box {
+            background: #1a2234;
+            border: 1px solid #1e293b;
+            border-left: 4px solid var(--primary);
+            border-radius: 6px;
+            padding: 1rem 1.25rem;
+            font-size: 0.9rem;
+            white-space: pre-wrap;
+            color: #e2e8f0;
+            line-height: 1.6;
+        }
+
+        .terminal-container {
+            background: #090d16;
+            border: 1px solid #1e293b;
+            border-radius: 8px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .terminal-header {
+            background: #0f172a;
+            border-bottom: 1px solid #1e293b;
+            padding: 0.5rem 1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .terminal-tabs {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .terminal-tab {
+            padding: 0.25rem 0.6rem;
+            border-radius: 4px;
+            cursor: pointer;
+            background: transparent;
+            border: 1px solid transparent;
+            color: var(--text-muted);
+            font-size: 0.75rem;
+        }
+
+        .terminal-tab.active {
+            background: #1e293b;
+            color: #fff;
+            border-color: #334155;
+        }
+
+        .terminal-body {
+            padding: 1rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.82rem;
+            color: #e2e8f0;
+            max-height: 480px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+            line-height: 1.45;
+        }
+
+        .findings-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+
+        .finding-card {
+            border: 1px solid #334155;
+            border-radius: 8px;
+            padding: 1rem;
+            background: #1e293b;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .empty-placeholder {
+            text-align: center;
+            padding: 3rem 1rem;
+            color: var(--text-muted);
+            background: var(--surface-subtle);
+            border-radius: 8px;
+            border: 1px dashed var(--border-color);
+        }
+
+        /* Toast Notifications */
+        #toast-container {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            z-index: 9999;
+        }
+
+        .toast {
+            background-color: var(--surface-color);
+            color: var(--text-color);
+            border: 1px solid var(--border-color);
+            padding: 0.85rem 1.25rem;
+            border-radius: 8px;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-size: 0.9rem;
+            animation: slideIn 0.2s ease-out;
+            max-width: 400px;
+        }
+
+        .toast-success { border-left: 4px solid var(--green); }
+        .toast-error { border-left: 4px solid var(--red); }
+        .toast-info { border-left: 4px solid var(--primary); }
+
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="header-container">
+            <div class="header-left">
+                <a href="/" class="nav-back-btn">← Back to Overview</a>
+                <a href="/" class="logo">
+                    <span>🐰</span> CodeRabbit PR Automator
+                </a>
+            </div>
+            <div>
+                <span id="auto-refresh-indicator" style="font-size: 0.8rem; color: var(--text-muted);">● Auto-refreshing</span>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <div class="breadcrumb">
+            <a href="/">Dashboard</a>
+            <span>/</span>
+            <span id="bc-repo">Repository</span>
+            <span>/</span>
+            <span id="bc-pr">PR #</span>
+        </div>
+
+        <!-- PR Header Details -->
+        <div class="pr-header-card">
+            <div class="pr-title-row">
+                <div class="pr-title-group">
+                    <h1 class="pr-title" id="pr-title">Loading Pull Request Details...</h1>
+                    <div class="pr-meta-row" id="pr-meta-row">
+                        <span class="pr-meta-item">👤 <strong id="pr-author">-</strong></span>
+                        <span class="pr-meta-item">🎯 Base: <code id="pr-base">-</code></span>
+                        <span class="pr-meta-item">🌱 Head: <code id="pr-head">-</code></span>
+                        <span class="pr-meta-item">#️⃣ Commit: <code id="pr-sha">-</code></span>
+                    </div>
+                </div>
+                <div style="display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap;">
+                    <a id="pr-github-link" href="#" target="_blank" class="btn">GitHub ↗</a>
+                    <a id="pr-report-link" href="#" target="_blank" class="btn btn-primary" style="display: none;">📄 HTML Report</a>
+                    <button id="btn-review" class="btn" onclick="triggerPRReview(false)">⚡ Run Review</button>
+                    <button id="btn-force" class="btn btn-warning" onclick="triggerPRReview(true)" title="Force review and bypass rate limits">⚡ Force Review</button>
+                </div>
+            </div>
+            <div id="pr-status-pills" style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.25rem;">
+                <!-- Status badges inserted here -->
+            </div>
+        </div>
+
+        <!-- Quick Summary Stats -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <span class="stat-title">Review Outcome</span>
+                <span class="stat-val" id="stat-outcome" style="font-size: 1.15rem; margin-top: 0.25rem;">-</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-title">Critical / Major Issues</span>
+                <span class="stat-val" id="stat-critical" style="color: var(--red);">-</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-title">Minor Issues / Warnings</span>
+                <span class="stat-val" id="stat-minor" style="color: var(--yellow);">-</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-title">Execution Duration</span>
+                <span class="stat-val" id="stat-duration" style="color: var(--cyan);">-</span>
+            </div>
+        </div>
+
+        <!-- Details Grid: History Sidebar + Main Logs View -->
+        <div class="details-grid">
+            <!-- Sidebar: Run History -->
+            <div class="runs-sidebar">
+                <div class="sidebar-title">
+                    <span>Review History</span>
+                    <span id="history-count" class="badge badge-gray">0 runs</span>
+                </div>
+                <div class="runs-list" id="runs-list">
+                    <div style="font-size: 0.8rem; color: var(--text-muted); text-align: center; padding: 1rem;">No prior review runs recorded.</div>
+                </div>
+            </div>
+
+            <!-- Main Content Area: Selected Run Details -->
+            <div class="log-content-area">
+                <!-- Summary Section -->
+                <div>
+                    <div class="section-heading">
+                        <span>Review Summary</span>
+                        <span id="selected-run-timestamp" style="font-size: 0.8rem; color: var(--text-muted); font-weight: normal;"></span>
+                    </div>
+                    <div id="summary-content" class="summary-box" style="margin-top: 0.75rem;">
+                        No review summary available. Trigger a review to analyze this pull request.
+                    </div>
+                </div>
+
+                <!-- Structured Findings Breakdown -->
+                <div>
+                    <div class="section-heading">
+                        <span>Findings & Line Diagnostics</span>
+                        <span id="findings-count-badge" class="badge badge-gray">0 issues</span>
+                    </div>
+                    <div id="findings-container" class="findings-list" style="margin-top: 0.75rem;">
+                        <div class="empty-placeholder">No line findings reported for this run.</div>
+                    </div>
+                </div>
+
+                <!-- Complete Raw Execution Logs (stdout / stderr) -->
+                <div>
+                    <div class="section-heading">
+                        <span>Complete Execution Logs</span>
+                        <div style="display: flex; gap: 0.5rem; align-items: center;">
+                            <button class="btn" style="padding: 0.25rem 0.6rem; font-size: 0.75rem;" onclick="copyCurrentLog()">📋 Copy Logs</button>
+                        </div>
+                    </div>
+                    <div class="terminal-container" style="margin-top: 0.75rem;">
+                        <div class="terminal-header">
+                            <div class="terminal-tabs">
+                                <button id="tab-stdout" class="terminal-tab active" onclick="switchLogTab('stdout')">CodeRabbit Output (stdout)</button>
+                                <button id="tab-stderr" class="terminal-tab" onclick="switchLogTab('stderr')">CLI Diagnostics (stderr)</button>
+                            </div>
+                            <span id="terminal-meta">Exit: 0</span>
+                        </div>
+                        <div class="terminal-body" id="terminal-log-body">Awaiting log stream...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <div id="toast-container"></div>
+
+    <script>
+        const urlParams = new URLSearchParams(window.location.search);
+        const currentPrKey = urlParams.get('pr_key');
+        let currentPrData = null;
+        let selectedRunIndex = 0;
+        let activeLogTab = 'stdout';
+
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = `toast toast-${type}`;
+            const icons = { success: '✅', error: '❌', info: 'ℹ️' };
+            toast.innerHTML = `<span>${icons[type] || 'ℹ️'}</span> <span>${escapeHtml(message)}</span>`;
+            container.appendChild(toast);
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transition = 'opacity 0.3s ease';
+                setTimeout(() => toast.remove(), 300);
+            }, 4000);
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+            return String(text).replace(/[&<>"']/g, m => map[m]);
+        }
+
+        async function fetchPRDetails() {
+            if (!currentPrKey) {
+                document.getElementById('pr-title').textContent = 'Error: No pr_key specified';
+                return;
+            }
+
+            try {
+                const res = await fetch(`/api/pr/details?pr_key=${encodeURIComponent(currentPrKey)}`);
+                if (!res.ok) {
+                    if (res.status === 404) {
+                        document.getElementById('pr-title').textContent = `Pull Request ${currentPrKey} Not Found`;
+                        return;
+                    }
+                    throw new Error(`HTTP ${res.status}`);
+                }
+                const data = await res.json();
+                currentPrData = data;
+                renderDetailsView();
+            } catch (err) {
+                console.error("Failed to fetch PR details:", err);
+            }
+        }
+
+        function renderDetailsView() {
+            if (!currentPrData) return;
+            const pr = currentPrData.pr || {};
+            const logs = currentPrData.logs || [];
+            const status = currentPrData.status || {};
+
+            // Breadcrumbs & Title
+            document.getElementById('bc-repo').textContent = pr.repo || 'Repository';
+            document.getElementById('bc-pr').textContent = `#${pr.number || ''}`;
+            document.getElementById('pr-title').textContent = pr.title || `Pull Request #${pr.number}`;
+            document.getElementById('pr-author').textContent = pr.author || 'Unknown';
+            document.getElementById('pr-base').textContent = pr.base_ref || 'main';
+            document.getElementById('pr-head').textContent = pr.head_ref || 'unknown';
+            document.getElementById('pr-sha').textContent = (pr.head_sha || '').substring(0, 7) || 'N/A';
+
+            // GitHub link
+            const ghLink = document.getElementById('pr-github-link');
+            if (pr.html_url) {
+                ghLink.href = pr.html_url;
+                ghLink.style.display = 'inline-flex';
+            } else {
+                ghLink.style.display = 'none';
+            }
+
+            // HTML Report link
+            const reportFile = pr.report_file || status.report_file || (logs[0] && logs[0].report_file);
+            const rptBtn = document.getElementById('pr-report-link');
+            if (reportFile) {
+                rptBtn.href = `/reports/${reportFile}`;
+                rptBtn.style.display = 'inline-flex';
+            } else {
+                rptBtn.style.display = 'none';
+            }
+
+            // Status badges
+            renderStatusPills(pr, status);
+
+            // History list in sidebar
+            renderRunHistory(logs);
+
+            // Render current selected run details
+            renderSelectedRun();
+        }
+
+        function renderStatusPills(pr, status) {
+            const container = document.getElementById('pr-status-pills');
+            const pills = [];
+
+            if (pr.status_badge === 'REVIEW_IN_PROGRESS') {
+                pills.push(`<span class="badge badge-blue">⚡ Review in Progress (Attempt ${pr.attempt || 1}/3)</span>`);
+            } else if (pr.status_badge === 'RATE_LIMITED') {
+                pills.push(`<span class="badge badge-orange">⏳ Rate Limited (${escapeHtml(pr.status_label || 'Retrying')})</span>`);
+            } else if (pr.has_user_auto_approved || pr.status_badge === 'APPROVED') {
+                pills.push(`<span class="badge badge-green">🤖 Auto Approved by You</span>`);
+            } else if (pr.has_user_manually_approved || pr.status_badge === 'MANUALLY_APPROVED') {
+                pills.push(`<span class="badge badge-blue">👤 Manually Approved</span>`);
+            } else if (status.review_outcome === 'NEEDS_WORK (Minor Issues Detected)') {
+                pills.push(`<span class="badge badge-yellow">💬 Needs Work (Minor Issues)</span>`);
+            } else if (pr.status_badge === 'COMMENTS_POSTED') {
+                pills.push(`<span class="badge badge-yellow">💬 Comments Posted</span>`);
+            } else if (pr.status_badge === 'SKIPPED_MAX_FILES') {
+                pills.push(`<span class="badge badge-red">🛑 Skipped (>100 Files)</span>`);
+            } else if (pr.is_own_pr) {
+                pills.push(`<span class="badge badge-purple">👤 Your PR (Author)</span>`);
+            } else {
+                pills.push(`<span class="badge badge-gray">⏳ Pending Review</span>`);
+            }
+
+            if (pr.has_check_error) {
+                pills.push(`<span class="badge badge-red">⚠️ Check Error</span>`);
+            }
+            if (pr.has_conflict) {
+                pills.push(`<span class="badge badge-red">⚠️ Merge Conflict</span>`);
+            }
+
+            container.innerHTML = pills.join('');
+        }
+
+        function renderRunHistory(logs) {
+            const list = document.getElementById('runs-list');
+            document.getElementById('history-count').textContent = `${logs.length} run${logs.length === 1 ? '' : 's'}`;
+
+            if (!logs || logs.length === 0) {
+                list.innerHTML = `<div style="font-size: 0.8rem; color: var(--text-muted); text-align: center; padding: 1.5rem 0.5rem;">No review runs recorded yet. Click "⚡ Run Review" to trigger a run.</div>`;
+                return;
+            }
+
+            list.innerHTML = logs.map((log, index) => {
+                const date = log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : 'Recent';
+                const outcome = log.review_outcome || log.status || 'UNKNOWN';
+                const isErr = outcome === 'ERROR';
+                const badgeClass = isErr ? 'badge-red' : (outcome.includes('APPROVED') ? 'badge-green' : 'badge-yellow');
+                const activeClass = index === selectedRunIndex ? 'active' : '';
+
+                return `
+                    <div class="run-item ${activeClass}" onclick="selectRun(${index})">
+                        <div class="run-item-top">
+                            <span class="badge ${badgeClass}" style="font-size: 0.7rem; padding: 0.15rem 0.45rem;">${escapeHtml(outcome)}</span>
+                            <span class="run-time">${escapeHtml(date)}</span>
+                        </div>
+                        <div class="run-item-details">
+                            <span>SHA: <code>${(log.head_sha || '').substring(0, 7) || 'N/A'}</code></span>
+                            <span>⏱️ ${log.elapsed_seconds || 0}s</span>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function selectRun(index) {
+            selectedRunIndex = index;
+            renderRunHistory(currentPrData.logs || []);
+            renderSelectedRun();
+        }
+
+        function renderSelectedRun() {
+            const logs = currentPrData.logs || [];
+            const log = logs[selectedRunIndex] || null;
+
+            if (!log) {
+                document.getElementById('stat-outcome').textContent = currentPrData.pr.status_label || 'Pending Review';
+                document.getElementById('stat-critical').textContent = '0';
+                document.getElementById('stat-minor').textContent = '0';
+                document.getElementById('stat-duration').textContent = '0.0s';
+                document.getElementById('summary-content').textContent = 'No review run selected or recorded yet. Trigger a review using the button above.';
+                document.getElementById('findings-container').innerHTML = '<div class="empty-placeholder">No line findings recorded.</div>';
+                document.getElementById('terminal-log-body').textContent = 'No execution logs available.';
+                return;
+            }
+
+            // Stats
+            document.getElementById('stat-outcome').textContent = log.review_outcome || log.status || 'DONE';
+            document.getElementById('stat-critical').textContent = log.critical_major_count ?? (log.findings ? log.findings.filter(f => ['CRITICAL', 'MAJOR', 'ERROR'].includes(String(f.severity).toUpperCase())).length : 0);
+            document.getElementById('stat-minor').textContent = log.minor_count ?? (log.findings ? log.findings.filter(f => !['CRITICAL', 'MAJOR', 'ERROR', 'INFO'].includes(String(f.severity).toUpperCase())).length : 0);
+            document.getElementById('stat-duration').textContent = `${log.elapsed_seconds || 0}s`;
+
+            // Summary
+            document.getElementById('selected-run-timestamp').textContent = log.timestamp ? new Date(log.timestamp).toLocaleString() : '';
+            document.getElementById('summary-content').textContent = log.summary || log.error || 'Review completed.';
+
+            // Findings
+            const findings = log.findings || [];
+            document.getElementById('findings-count-badge').textContent = `${findings.length} issue${findings.length === 1 ? '' : 's'}`;
+            const findingsContainer = document.getElementById('findings-container');
+
+            if (findings.length === 0) {
+                findingsContainer.innerHTML = '<div class="empty-placeholder">✨ No issues or warnings reported in this review.</div>';
+            } else {
+                findingsContainer.innerHTML = findings.map(f => {
+                    const sev = String(f.severity || 'INFO').toUpperCase();
+                    const sevClass = ['CRITICAL', 'MAJOR', 'ERROR'].includes(sev) ? 'badge-red' : (['WARNING', 'WARN'].includes(sev) ? 'badge-yellow' : 'badge-blue');
+                    const file = f.file || f.path || 'unknown';
+                    const line = f.line ? `:${f.line}` : '';
+                    const msg = f.message || f.description || JSON.stringify(f);
+
+                    return `
+                        <div class="finding-card">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <span class="badge ${sevClass}">${escapeHtml(sev)}</span>
+                                <code style="font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; color: #94a3b8;">${escapeHtml(file)}${escapeHtml(line)}</code>
+                            </div>
+                            <div style="font-size: 0.88rem; color: #f1f5f9; line-height: 1.5; white-space: pre-wrap;">${escapeHtml(msg)}</div>
+                        </div>
+                    `;
+                }).join('');
+            }
+
+            // Terminal meta
+            document.getElementById('terminal-meta').textContent = `Exit Code: ${log.retcode ?? 0} | Head: ${(log.head_sha || '').substring(0, 7)}`;
+
+            // Terminal Logs body
+            updateTerminalBody();
+        }
+
+        function switchLogTab(tab) {
+            activeLogTab = tab;
+            document.getElementById('tab-stdout').classList.toggle('active', tab === 'stdout');
+            document.getElementById('tab-stderr').classList.toggle('active', tab === 'stderr');
+            updateTerminalBody();
+        }
+
+        function updateTerminalBody() {
+            const logs = currentPrData.logs || [];
+            const log = logs[selectedRunIndex] || {};
+            const term = document.getElementById('terminal-log-body');
+
+            if (activeLogTab === 'stdout') {
+                term.textContent = log.stdout ? log.stdout.trim() : (log.status === 'ERROR' ? 'No stdout output (failed before CLI output)' : 'No stdout recorded for this run.');
+            } else {
+                term.textContent = log.stderr ? log.stderr.trim() : 'No stderr or error diagnostic output.';
+            }
+        }
+
+        function copyCurrentLog() {
+            const term = document.getElementById('terminal-log-body');
+            if (!term || !term.textContent) return;
+            navigator.clipboard.writeText(term.textContent).then(() => {
+                showToast("Terminal logs copied to clipboard!", "success");
+            }).catch(() => {
+                showToast("Could not copy logs to clipboard", "error");
+            });
+        }
+
+        async function triggerPRReview(force = false) {
+            if (!currentPrKey) return;
+            const btn = document.getElementById(force ? 'btn-force' : 'btn-review');
+            const originalText = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = `<span class="btn-spinner"></span> ${force ? 'Forcing...' : 'Starting...'}`;
+
+            try {
+                const res = await fetch('/api/trigger', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ pr_key: currentPrKey, force: force })
+                });
+
+                if (res.ok) {
+                    showToast(`⚡ Review triggered for ${currentPrKey}${force ? ' (forced)' : ''}! Scanning in progress...`, 'success');
+                    // Refresh details after a short interval
+                    setTimeout(fetchPRDetails, 1500);
+                } else {
+                    showToast('Failed to trigger review pass.', 'error');
+                }
+            } catch (err) {
+                console.error("Trigger error:", err);
+                showToast('Network error triggering review pass.', 'error');
+            } finally {
+                setTimeout(() => {
+                    btn.disabled = false;
+                    btn.innerHTML = originalText;
+                }, 2000);
+            }
+        }
+
+        // Initialize and auto-refresh every 5s
+        fetchPRDetails();
+        setInterval(fetchPRDetails, 5000);
+    </script>
+</body>
+</html>

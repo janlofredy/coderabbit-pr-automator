@@ -487,6 +487,22 @@ class AutoReviewEngine:
                 "author": pr_author,
                 "is_own_pr": is_own_pr
             }
+            self.state_manager.record_pr_log(pr_key, {
+                "status": "ERROR",
+                "review_outcome": "ERROR",
+                "retcode": retcode,
+                "elapsed_seconds": round(elapsed, 1),
+                "head_sha": head_sha,
+                "base_ref": base_ref,
+                "head_ref": head_ref,
+                "author": pr_author,
+                "title": pr.get("title", ""),
+                "html_url": pr.get("html_url", ""),
+                "file_count": file_count,
+                "stdout": stdout,
+                "stderr": stderr,
+                "error": stderr
+            })
             self.state_manager.record_pr_status(pr_key, status_data)
             return status_data
 
@@ -652,6 +668,27 @@ Review complete. Detailed findings submitted directly to this pull request.
             "is_own_pr": is_own_pr,
             "elapsed_seconds": round(elapsed, 1)
         }
+        self.state_manager.record_pr_log(pr_key, {
+            "status": "COMPLETED",
+            "review_outcome": review_outcome,
+            "event": event,
+            "findings_count": len(findings_list),
+            "critical_major_count": critical_major_count,
+            "minor_count": minor_count,
+            "report_file": report_file,
+            "head_sha": head_sha,
+            "base_ref": base_ref,
+            "head_ref": head_ref,
+            "author": pr_author,
+            "title": pr.get("title", ""),
+            "html_url": pr.get("html_url", ""),
+            "file_count": file_count,
+            "elapsed_seconds": round(elapsed, 1),
+            "summary": summary_text,
+            "findings": findings_list,
+            "stdout": stdout,
+            "stderr": stderr
+        })
         self.state_manager.record_pr_status(pr_key, status_data)
         return status_data
 

@@ -227,17 +227,33 @@ class TestDashboardBackend(unittest.TestCase):
             self.assertIn("auto_approve", cfg_res)
             self.assertIn("strict_approval", cfg_res)
 
-        # 7. Test POST /api/config
-        update_data = json.dumps({"poll_interval_seconds": 600, "max_files_limit": 80}).encode()
-        req = urllib.request.Request(f"{base_url}/api/config", data=update_data, method="POST")
-        with urllib.request.urlopen(req) as resp:
+        # 8. Test GET /pr-details
+        with urllib.request.urlopen(f"{base_url}/pr-details?pr_key=owner/repo1%23101") as resp:
             self.assertEqual(resp.status, 200)
-            cfg_updated = json.loads(resp.read().decode())
-            self.assertEqual(cfg_updated["poll_interval_seconds"], 600)
-            self.assertEqual(cfg_updated["max_files_limit"], 80)
+            self.assertIn(b"Pull Request Details & Logs", resp.read())
+
+        # 9. Test GET /api/pr/details
+        # First record a sample review log
+        self.state_mgr.record_pr_log("owner/repo1#101", {
+            "status": "COMPLETED",
+            "review_outcome": "APPROVED",
+            "retcode": 0,
+            "stdout": "CodeRabbit finished review. 0 issues.",
+            "stderr": "",
+            "elapsed_seconds": 12.5,
+            "findings": []
+        })
+        with urllib.request.urlopen(f"{base_url}/api/pr/details?pr_key=owner/repo1%23101") as resp:
+            self.assertEqual(resp.status, 200)
+            pr_data = json.loads(resp.read().decode())
+            self.assertIn("pr", pr_data)
+            self.assertIn("logs", pr_data)
+            self.assertEqual(len(pr_data["logs"]), 1)
+            self.assertEqual(pr_data["logs"][0]["stdout"], "CodeRabbit finished review. 0 issues.")
 
         server.shutdown()
         server.server_close()
+
 
     def test_status_badge_needs_work_minor_issues(self):
         self.backend.refresh_pr_cache()

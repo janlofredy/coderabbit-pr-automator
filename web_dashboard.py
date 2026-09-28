@@ -279,6 +279,46 @@ class DashboardBackend:
             "scan_in_progress": bool(self._scan_in_progress)
         }
 
+    def get_pr_details(self, pr_key: str) -> Optional[Dict[str, Any]]:
+        """Retrieves aggregated details, status, and execution logs for a specific PR."""
+        annotated_data = self.get_annotated_status()
+        target_pr = next((p for p in annotated_data["pull_requests"] if p["pr_key"] == pr_key), None)
+        
+        pr_status = self.state_manager.get_pr_status(pr_key) or {}
+        logs = self.state_manager.get_pr_logs(pr_key)
+
+        if not target_pr and not pr_status and not logs:
+            return None
+
+        # Build fallback PR metadata if PR is closed or missing from cache
+        if not target_pr:
+            repo = pr_key.split("#")[0] if "#" in pr_key else ""
+            num = int(pr_key.split("#")[1]) if "#" in pr_key and pr_key.split("#")[1].isdigit() else 0
+            target_pr = {
+                "pr_key": pr_key,
+                "repo": repo,
+                "number": num,
+                "title": pr_status.get("title", f"PR #{num}"),
+                "author": pr_status.get("author", "Unknown"),
+                "is_own_pr": pr_status.get("is_own_pr", False),
+                "base_ref": pr_status.get("base_ref", "main"),
+                "head_ref": pr_status.get("head_ref", ""),
+                "head_sha": pr_status.get("head_sha", ""),
+                "html_url": pr_status.get("html_url", ""),
+                "status_badge": pr_status.get("status", "UNKNOWN"),
+                "status_label": pr_status.get("status", "Unknown"),
+                "report_file": pr_status.get("report_file", "")
+            }
+
+        return {
+            "pr": target_pr,
+            "status": pr_status,
+            "logs": logs,
+            "total_logs": len(logs),
+            "latest_log": logs[0] if logs else None
+        }
+
+
 
 # Global backend instance
 backend: Optional[DashboardBackend] = None
@@ -313,6 +353,20 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 self._set_headers(500, "text/plain")
                 self.wfile.write(f"Error loading dashboard: {e}".encode("utf-8"))
             return
+
+        if path in ("/pr-details", "/pr-details.html"):
+            # Serve pr_details.html
+            html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pr_details.html")
+            try:
+                with open(html_path, "rb") as f:
+                    content = f.read()
+                self._set_headers(200, "text/html; charset=utf-8")
+                self.wfile.write(content)
+            except Exception as e:
+                self._set_headers(500, "text/plain")
+                self.wfile.write(f"Error loading PR details page: {e}".encode("utf-8"))
+            return
+
 
         if path in ("/favicon.ico", "/assets/favicon.ico"):
             ico_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "favicon.ico")
@@ -352,11 +406,28 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(data).encode("utf-8"))
             return
 
+        if path in ("/api/pr/details", "/api/pr/logs"):
+            query_params = parse_qs(parsed.query)
+            pr_key = query_params.get("pr_key", [""])[0].strip()
+            if not pr_key:
+                self._set_headers(400)
+                self.wfile.write(json.dumps({"error": "Missing 'pr_key' query parameter"}).encode("utf-8"))
+                return
+            details = backend.get_pr_details(pr_key)
+            if details is None:
+                self._set_headers(404)
+                self.wfile.write(json.dumps({"error": f"Pull request '{pr_key}' not found"}).encode("utf-8"))
+                return
+            self._set_headers(200)
+            self.wfile.write(json.dumps(details).encode("utf-8"))
+            return
+
         if path == "/api/config":
             cfg_data = backend.config_manager.get_settings()
             self._set_headers(200)
             self.wfile.write(json.dumps(cfg_data).encode("utf-8"))
             return
+
 
         if path == "/api/repos":
             repos = backend.config_manager.get_repos()

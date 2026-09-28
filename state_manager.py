@@ -205,3 +205,38 @@ class StateManager:
     def get_last_run(self) -> str:
         state = self.load_state()
         return state.get("last_run_timestamp", "")
+
+    def record_pr_log(self, pr_key: str, log_entry: Dict[str, Any], max_history: int = 20) -> str:
+        """
+        Appends an execution log record for a pull request to the persistent history.
+        Returns: the log_id generated for this entry.
+        """
+        state = self.load_state()
+        pr_logs = state.get("pr_logs", {})
+        if pr_key not in pr_logs:
+            pr_logs[pr_key] = []
+
+        now = datetime.now(timezone.utc)
+        log_id = f"{int(now.timestamp() * 1000000)}_{pr_key.replace('/', '_').replace('#', '_')}"
+        log_entry["log_id"] = log_id
+        log_entry["timestamp"] = now.isoformat()
+
+        pr_logs[pr_key].insert(0, log_entry)
+        pr_logs[pr_key] = pr_logs[pr_key][:max_history]
+
+        state["pr_logs"] = pr_logs
+        self.save_state(state)
+        return log_id
+
+    def get_pr_logs(self, pr_key: str) -> list:
+        """Retrieves list of recorded review logs for a PR (most recent first)."""
+        state = self.load_state()
+        return state.get("pr_logs", {}).get(pr_key, [])
+
+    def get_pr_log_by_id(self, pr_key: str, log_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieves a specific execution log entry by log_id."""
+        logs = self.get_pr_logs(pr_key)
+        for entry in logs:
+            if entry.get("log_id") == log_id:
+                return entry
+        return None

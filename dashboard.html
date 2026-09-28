@@ -895,7 +895,8 @@
                         </div>
                     </div>
                     <div class="pr-actions">
-                        ${hasReport ? `<a href="/reports/${pr.report_file}" target="_blank" class="btn btn-sm btn-primary">📄 View Report</a>` : ''}
+                        <a href="/pr-details?pr_key=${encodeURIComponent(pr.pr_key)}" class="btn btn-sm btn-primary" title="View complete execution logs and review diagnostics">📋 Details & Logs</a>
+                        ${hasReport ? `<a href="/reports/${pr.report_file}" target="_blank" class="btn btn-sm">📄 View Report</a>` : ''}
                         <a href="${pr.html_url}" target="_blank" class="btn btn-sm">GitHub ↗</a>
                         <button class="btn btn-sm" onclick="triggerReview('${pr.pr_key}', false, event)">⚡ Review</button>
                         <button class="btn btn-sm btn-warning" onclick="triggerReview('${pr.pr_key}', true, event)" title="Bypass rate limit or prior review">⚡ Force</button>
