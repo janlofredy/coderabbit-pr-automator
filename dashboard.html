@@ -100,8 +100,116 @@
 
         .btn-success { background-color: #065f46; border-color: var(--green); color: #ecfdf5; }
         .btn-warning { background-color: #78350f; border-color: var(--yellow); color: #fffbeb; }
-        .btn-danger { background-color: #7f1d1d; border-color: var(--red); color: #fef2f2; }
-        .btn-sm { padding: 0.25rem 0.6rem; font-size: 0.75rem; border-radius: 4px; }
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+
+        .btn-loading {
+            position: relative;
+            pointer-events: none;
+            opacity: 0.75;
+        }
+
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 13px;
+            height: 13px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-top-color: #ffffff;
+            border-radius: 50%;
+            animation: spin 0.75s linear infinite;
+            vertical-align: middle;
+            margin-right: 4px;
+        }
+
+        /* Toast Notifications */
+        .toast-container {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            z-index: 9999;
+            pointer-events: none;
+        }
+
+        .toast {
+            pointer-events: auto;
+            min-width: 280px;
+            max-width: 440px;
+            padding: 12px 18px;
+            border-radius: 8px;
+            font-size: 0.875rem;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.6);
+            animation: toast-in 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+            transition: all 0.25s ease;
+        }
+
+        .toast.toast-info {
+            background: #1e293b;
+            color: #f8fafc;
+            border: 1px solid #3b82f6;
+        }
+
+        .toast.toast-success {
+            background: #064e3b;
+            color: #ecfdf5;
+            border: 1px solid #10b981;
+        }
+
+        .toast.toast-warning {
+            background: #78350f;
+            color: #fffbeb;
+            border: 1px solid #f59e0b;
+        }
+
+        .toast.toast-error {
+            background: #7f1d1d;
+            color: #fef2f2;
+            border: 1px solid #ef4444;
+        }
+
+        .toast-hide {
+            opacity: 0;
+            transform: translateX(30px);
+        }
+
+        @keyframes toast-in {
+            from {
+                opacity: 0;
+                transform: translateY(12px) scale(0.95);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
+        }
+
+        /* Processing Banner */
+        .banner-processing {
+            background: linear-gradient(90deg, #1e1b4b, #312e81);
+            border-bottom: 1px solid #6366f1;
+            color: #e0e7ff;
+            padding: 0.65rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+        .banner-processing.hidden { display: none; }
 
         .banner-rate-limit {
             background: linear-gradient(90deg, #7c2d12, #9a3412);
@@ -365,13 +473,22 @@
         <div class="header-actions">
             <span id="service-status-pill" class="badge badge-green">RUNNING</span>
             <span id="strict-mode-pill" class="badge badge-purple" title="Strict Mode: PRs with any minor issue are not approved">STRICT: ON</span>
-            <button class="btn btn-sm" onclick="openSettingsModal()">⚙️ Settings</button>
-            <button class="btn btn-sm" onclick="openRepoModal()">📁 Repositories</button>
+            <button id="btn-settings" class="btn btn-sm" onclick="openSettingsModal()">⚙️ Settings</button>
+            <button id="btn-repos" class="btn btn-sm" onclick="openRepoModal()">📁 Repositories</button>
             <button id="btn-toggle-service" class="btn btn-sm" onclick="toggleService()">Pause Service</button>
-            <button class="btn btn-primary btn-sm" onclick="triggerScan(false)">▶ Run Scan Now</button>
+            <button id="btn-scan-now" class="btn btn-primary btn-sm" onclick="triggerScan(false)">▶ Run Scan Now</button>
             <button id="btn-refresh" class="btn btn-sm" onclick="refreshLatestPRs()">🔄 Refresh</button>
         </div>
     </header>
+
+    <div id="processing-banner" class="banner-processing hidden">
+        <div>
+            <span class="spinner" style="border-top-color: #a5b4fc;"></span>
+            <strong>Review Engine Active:</strong>
+            <span id="processing-banner-text" style="margin-left: 0.5rem;">Reviewing pull requests in the background...</span>
+        </div>
+        <span class="badge badge-purple" style="font-size: 0.75rem;">SCANNING</span>
+    </div>
 
     <div id="rate-limit-banner" class="banner-rate-limit hidden">
         <div>
@@ -493,10 +610,51 @@
         </div>
     </div>
 
+    <!-- Toast Notification Container -->
+    <div id="toast-container" class="toast-container"></div>
+
     <script>
         let currentStatus = null;
         let rateLimitExpiresAt = 0;
         let countdownTimer = null;
+        let activeActionCount = 0;
+
+        function showToast(message, type = 'info', durationMs = 4000) {
+            const container = document.getElementById('toast-container');
+            if (!container) return;
+            const toast = document.createElement('div');
+            toast.className = `toast toast-${type}`;
+            
+            let icon = 'ℹ️';
+            if (type === 'success') icon = '✅';
+            else if (type === 'warning') icon = '⚠️';
+            else if (type === 'error') icon = '❌';
+
+            toast.innerHTML = `<span>${icon}</span><span style="flex:1;">${escapeHtml(message)}</span>`;
+            container.appendChild(toast);
+
+            setTimeout(() => {
+                toast.classList.add('toast-hide');
+                setTimeout(() => toast.remove(), 300);
+            }, durationMs);
+        }
+
+        function setButtonLoading(btn, loading, loadingHtml = null) {
+            if (!btn) return;
+            if (loading) {
+                btn.dataset.originalHtml = btn.innerHTML;
+                btn.disabled = true;
+                btn.classList.add('btn-loading');
+                btn.innerHTML = loadingHtml || `<span class="spinner"></span>Processing...`;
+            } else {
+                if (btn.dataset.originalHtml) {
+                    btn.innerHTML = btn.dataset.originalHtml;
+                    delete btn.dataset.originalHtml;
+                }
+                btn.disabled = false;
+                btn.classList.remove('btn-loading');
+            }
+        }
 
         async function fetchStatus() {
             try {
@@ -511,24 +669,21 @@
 
         async function refreshLatestPRs() {
             const btn = document.getElementById('btn-refresh');
-            const originalText = btn ? btn.innerHTML : '🔄 Refresh';
-            if (btn) {
-                btn.disabled = true;
-                btn.innerHTML = '⏳ Fetching PRs...';
-            }
+            setButtonLoading(btn, true, '<span class="spinner"></span>Refreshing...');
+            showToast('Fetching latest pull requests from GitHub...', 'info');
+
             try {
                 const res = await fetch('/api/status?force_refresh=true');
                 const data = await res.json();
                 currentStatus = data;
                 renderDashboard(data);
+                const count = (data.pull_requests || []).length;
+                showToast(`PR cache updated (${count} pull request${count === 1 ? '' : 's'} found).`, 'success');
             } catch (err) {
                 console.error("Failed to fetch latest PR details:", err);
-                alert("Failed to fetch latest PR details: " + err);
+                showToast("Failed to fetch latest PR details: " + err, 'error');
             } finally {
-                if (btn) {
-                    btn.disabled = false;
-                    btn.innerHTML = originalText;
-                }
+                setButtonLoading(btn, false);
             }
         }
 
@@ -571,6 +726,26 @@
                 document.getElementById('stat-last-run').textContent = date.toLocaleTimeString();
             } else {
                 document.getElementById('stat-last-run').textContent = "Scanning...";
+            }
+
+            // Processing / Scan Active Banner
+            const processingBanner = document.getElementById('processing-banner');
+            const processingBannerText = document.getElementById('processing-banner-text');
+            const hasActiveReviews = (data.pull_requests || []).some(p => p.status_badge === 'REVIEW_IN_PROGRESS');
+            const isScanning = Boolean(data.scan_in_progress || hasActiveReviews);
+
+            if (processingBanner) {
+                if (isScanning) {
+                    processingBanner.classList.remove('hidden');
+                    if (hasActiveReviews) {
+                        const inProgressPr = (data.pull_requests || []).find(p => p.status_badge === 'REVIEW_IN_PROGRESS');
+                        processingBannerText.textContent = `Reviewing ${inProgressPr.pr_key} in local CodeRabbit CLI...`;
+                    } else {
+                        processingBannerText.textContent = 'Review scanner running across repositories...';
+                    }
+                } else {
+                    processingBanner.classList.add('hidden');
+                }
             }
 
             // Rate Limit Banner
@@ -722,8 +897,8 @@
                     <div class="pr-actions">
                         ${hasReport ? `<a href="/reports/${pr.report_file}" target="_blank" class="btn btn-sm btn-primary">📄 View Report</a>` : ''}
                         <a href="${pr.html_url}" target="_blank" class="btn btn-sm">GitHub ↗</a>
-                        <button class="btn btn-sm" onclick="triggerReview('${pr.pr_key}', false)">⚡ Review</button>
-                        <button class="btn btn-sm btn-warning" onclick="triggerReview('${pr.pr_key}', true)" title="Bypass rate limit or prior review">⚡ Force</button>
+                        <button class="btn btn-sm" onclick="triggerReview('${pr.pr_key}', false, event)">⚡ Review</button>
+                        <button class="btn btn-sm btn-warning" onclick="triggerReview('${pr.pr_key}', true, event)" title="Bypass rate limit or prior review">⚡ Force</button>
                     </div>
                 </div>
                 `;
@@ -737,61 +912,119 @@
         }
 
         async function triggerScan(force = false) {
+            const btn = document.getElementById('btn-scan-now');
+            setButtonLoading(btn, true, '<span class="spinner"></span>Starting Scan...');
+            showToast(force ? 'Triggering forced repository scan...' : 'Starting background scan of pull requests...', 'info');
+
             try {
-                await fetch('/api/trigger', {
+                const res = await fetch('/api/trigger', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ force })
                 });
-                fetchStatus();
+                const data = await res.json();
+                if (res.ok) {
+                    showToast('Scan started! The engine is actively reviewing PRs in the background.', 'success');
+                } else {
+                    showToast(`Scan request failed: ${data.error || 'Server error'}`, 'error');
+                }
+                await fetchStatus();
             } catch (e) {
-                alert('Trigger failed: ' + e);
+                showToast('Failed to trigger scan: ' + e, 'error');
+            } finally {
+                setButtonLoading(btn, false);
             }
         }
 
-        async function triggerReview(prKey, force = false) {
+        async function triggerReview(prKey, force = false, event = null) {
+            const btn = event ? event.currentTarget : null;
+            if (btn) {
+                setButtonLoading(btn, true, force ? '<span class="spinner"></span>Forcing...' : '<span class="spinner"></span>Starting...');
+            }
+            showToast(force ? `Requesting forced review for ${prKey}...` : `Triggering review for ${prKey}...`, 'info');
+
             try {
-                await fetch('/api/trigger', {
+                const res = await fetch('/api/trigger', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ pr_key: prKey, force })
                 });
-                fetchStatus();
+                const data = await res.json();
+                if (res.ok) {
+                    showToast(`Review initiated for ${prKey}!`, 'success');
+                } else {
+                    showToast(`Failed to trigger review for ${prKey}: ${data.error || 'Server error'}`, 'error');
+                }
+                await fetchStatus();
             } catch (e) {
-                alert('Review trigger failed: ' + e);
+                showToast(`Review trigger error on ${prKey}: ` + e, 'error');
+            } finally {
+                if (btn) {
+                    setButtonLoading(btn, false);
+                }
             }
         }
 
         async function clearRateLimit() {
+            const btn = document.querySelector('#rate-limit-banner button');
+            if (btn) setButtonLoading(btn, true, '<span class="spinner"></span>Clearing...');
+            showToast('Clearing rate limit cooldown...', 'info');
+
             try {
-                await fetch('/api/clear-rate-limit', { method: 'POST' });
-                fetchStatus();
+                const res = await fetch('/api/clear-rate-limit', { method: 'POST' });
+                if (res.ok) {
+                    showToast('Rate limit cooldown cleared! Service resumed.', 'success');
+                } else {
+                    showToast('Failed to clear cooldown.', 'error');
+                }
+                await fetchStatus();
             } catch (e) {
-                alert('Failed to clear rate limit: ' + e);
+                showToast('Failed to clear rate limit: ' + e, 'error');
+            } finally {
+                if (btn) setButtonLoading(btn, false);
             }
         }
 
         async function toggleService() {
             if (!currentStatus) return;
+            const btn = document.getElementById('btn-toggle-service');
             const newStatus = !currentStatus.service_enabled;
+            setButtonLoading(btn, true, '<span class="spinner"></span>Updating...');
+
             try {
-                await fetch('/api/service/toggle', {
+                const res = await fetch('/api/service/toggle', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ enabled: newStatus })
                 });
-                fetchStatus();
+                const data = await res.json();
+                if (res.ok) {
+                    const statusText = data.service_enabled ? 'Service resumed' : 'Service paused';
+                    showToast(`${statusText} successfully.`, 'success');
+                } else {
+                    showToast('Failed to change service state.', 'error');
+                }
+                await fetchStatus();
             } catch (e) {
-                alert('Failed to toggle service: ' + e);
+                showToast('Failed to toggle service: ' + e, 'error');
+            } finally {
+                setButtonLoading(btn, false);
             }
         }
 
         async function toggleStrictApproval() {
+            showToast('Toggling strict approval policy...', 'info');
             try {
-                await fetch('/api/strict-approval/toggle', { method: 'POST' });
-                fetchStatus();
+                const res = await fetch('/api/strict-approval/toggle', { method: 'POST' });
+                const data = await res.json();
+                if (res.ok) {
+                    showToast(`Strict approval mode is now ${data.strict_approval ? 'ENABLED' : 'DISABLED'}.`, 'success');
+                } else {
+                    showToast('Failed to toggle strict mode.', 'error');
+                }
+                await fetchStatus();
             } catch (e) {
-                alert('Failed to toggle strict approval: ' + e);
+                showToast('Failed to toggle strict approval: ' + e, 'error');
             }
         }
 
@@ -824,42 +1057,58 @@
         }
 
         async function toggleRepo(fullName) {
+            showToast(`Updating status for ${fullName}...`, 'info');
             try {
-                await fetch('/api/repos/toggle', {
+                const res = await fetch('/api/repos/toggle', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ full_name: fullName })
                 });
+                const data = await res.json();
+                if (res.ok) {
+                    showToast(`${fullName} is now ${data.enabled ? 'Active' : 'Paused'}.`, 'success');
+                } else {
+                    showToast(`Error toggling ${fullName}: ${data.error || 'Server error'}`, 'error');
+                }
                 await fetchStatus();
                 renderRepoList();
             } catch (e) {
-                alert('Error toggling repo: ' + e);
+                showToast('Error toggling repo: ' + e, 'error');
             }
         }
 
         async function removeRepo(fullName) {
             if (!confirm(`Are you sure you want to remove ${fullName}?`)) return;
+            showToast(`Removing ${fullName}...`, 'info');
             try {
-                await fetch('/api/repos/remove', {
+                const res = await fetch('/api/repos/remove', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ full_name: fullName })
                 });
+                if (res.ok) {
+                    showToast(`Removed ${fullName} from monitored repositories.`, 'success');
+                } else {
+                    showToast(`Failed to remove ${fullName}.`, 'error');
+                }
                 await fetchStatus();
                 renderRepoList();
             } catch (e) {
-                alert('Error removing repo: ' + e);
+                showToast('Error removing repo: ' + e, 'error');
             }
         }
 
         async function addRepo() {
             const input = document.getElementById('new-repo-name');
             const msgEl = document.getElementById('repo-modal-msg');
+            const addBtn = document.querySelector('#repo-modal .form-group button');
             const fullName = input.value.trim();
             if (!fullName) return;
 
             msgEl.style.color = '#38bdf8';
             msgEl.textContent = 'Validating repository on GitHub...';
+            setButtonLoading(addBtn, true, '<span class="spinner"></span>Adding...');
+            showToast(`Validating and adding repository ${fullName}...`, 'info');
 
             try {
                 const res = await fetch('/api/repos/add', {
@@ -871,16 +1120,21 @@
                 if (res.ok) {
                     msgEl.style.color = '#10b981';
                     msgEl.textContent = `Repository ${fullName} successfully added!`;
+                    showToast(`Repository ${fullName} added successfully!`, 'success');
                     input.value = '';
                     await fetchStatus();
                     renderRepoList();
                 } else {
                     msgEl.style.color = '#ef4444';
                     msgEl.textContent = `Error: ${result.error || 'Failed to add repository'}`;
+                    showToast(`Could not add ${fullName}: ${result.error || 'Failed'}`, 'error');
                 }
             } catch (e) {
                 msgEl.style.color = '#ef4444';
                 msgEl.textContent = 'Error: ' + e;
+                showToast('Error adding repo: ' + e, 'error');
+            } finally {
+                setButtonLoading(addBtn, false);
             }
         }
 
@@ -926,6 +1180,7 @@
 
         async function saveSettings() {
             const msgEl = document.getElementById('settings-modal-msg');
+            const saveBtn = document.querySelector('#settings-modal .modal-header ~ div button.btn-primary');
             const pollInterval = parseInt(document.getElementById('setting-poll-interval').value, 10);
             const maxFiles = parseInt(document.getElementById('setting-max-files').value, 10);
             const autoApprove = document.getElementById('setting-auto-approve').checked;
@@ -935,11 +1190,13 @@
             if (isNaN(pollInterval) || pollInterval < 10) {
                 msgEl.style.color = '#ef4444';
                 msgEl.textContent = 'Poll interval must be at least 10 seconds.';
+                showToast('Poll interval must be at least 10 seconds.', 'warning');
                 return;
             }
             if (isNaN(maxFiles) || maxFiles < 1) {
                 msgEl.style.color = '#ef4444';
                 msgEl.textContent = 'Max files limit must be at least 1.';
+                showToast('Max files limit must be at least 1.', 'warning');
                 return;
             }
 
@@ -956,6 +1213,8 @@
 
             msgEl.style.color = '#38bdf8';
             msgEl.textContent = 'Saving settings to config.json...';
+            setButtonLoading(saveBtn, true, '<span class="spinner"></span>Saving...');
+            showToast('Saving updated settings...', 'info');
 
             try {
                 const res = await fetch('/api/config', {
@@ -966,14 +1225,18 @@
                 const updated = await res.json();
                 msgEl.style.color = '#10b981';
                 msgEl.textContent = 'Configuration saved successfully!';
+                showToast('Configuration saved successfully and applied!', 'success');
                 loadSettingsIntoModal(updated);
                 await fetchStatus();
                 setTimeout(() => {
                     closeSettingsModal();
-                }, 1200);
+                }, 1000);
             } catch (e) {
                 msgEl.style.color = '#ef4444';
                 msgEl.textContent = 'Failed to save settings: ' + e;
+                showToast('Failed to save settings: ' + e, 'error');
+            } finally {
+                setButtonLoading(saveBtn, false);
             }
         }
 

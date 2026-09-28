@@ -275,7 +275,8 @@ class DashboardBackend:
             "rate_limit_reason": reason,
             "repositories": config.get("repositories", []),
             "pull_requests": annotated_prs,
-            "authenticated_user": auth_user
+            "authenticated_user": auth_user,
+            "scan_in_progress": bool(self._scan_in_progress)
         }
 
 
