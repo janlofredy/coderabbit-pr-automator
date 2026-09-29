@@ -515,7 +515,6 @@
             <button id="btn-repos" class="btn btn-sm" onclick="openRepoModal()">📁 Repositories</button>
             <button id="btn-toggle-service" class="btn btn-sm" onclick="toggleService()">Pause Service</button>
             <button id="btn-scan-now" class="btn btn-primary btn-sm" onclick="triggerScan(false)">▶ Run Scan Now</button>
-            <button id="btn-refresh" class="btn btn-sm" onclick="refreshLatestPRs()">🔄 Refresh</button>
         </div>
     </header>
 
@@ -730,26 +729,6 @@
                 renderDashboard(data);
             } catch (err) {
                 console.error("Failed to load status:", err);
-            }
-        }
-
-        async function refreshLatestPRs() {
-            const btn = document.getElementById('btn-refresh');
-            setButtonLoading(btn, true, '<span class="spinner"></span>Refreshing...');
-            showToast('Fetching latest pull requests from GitHub...', 'info');
-
-            try {
-                const res = await fetch('/api/status?force_refresh=true');
-                const data = await res.json();
-                currentStatus = data;
-                renderDashboard(data);
-                const count = (data.pull_requests || []).length;
-                showToast(`PR cache updated (${count} pull request${count === 1 ? '' : 's'} found).`, 'success');
-            } catch (err) {
-                console.error("Failed to fetch latest PR details:", err);
-                showToast("Failed to fetch latest PR details: " + err, 'error');
-            } finally {
-                setButtonLoading(btn, false);
             }
         }
 
