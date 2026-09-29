@@ -9,12 +9,24 @@ echo "=========================================================="
 mkdir -p /app/data/config /app/data/reviews /app/data/repos
 mkdir -p /app/repos
 
-# In the single-volume CasaOS layout, link CodeRabbit's standard home to its
-# dedicated subdirectory. Docker Compose may instead mount ~/.coderabbit here.
+# Keep CodeRabbit's home on persistent storage. CasaOS mounts /app/data and
+# stores CLI state under /app/data/coderabbit-cli; standard Compose mounts the
+# host CLI home directly at /root/.coderabbit.
+mkdir -p /app/data/coderabbit-cli
 if [ -L /root/.coderabbit ]; then
     ln -sfn /app/data/coderabbit-cli /root/.coderabbit
-elif [ ! -e /root/.coderabbit ]; then
-    mkdir -p /app/data/coderabbit-cli
+elif awk '$5 == "/root/.coderabbit" { mounted=1 } END { exit !mounted }' /proc/self/mountinfo; then
+    echo "🔒 Using mounted CodeRabbit CLI home at /root/.coderabbit"
+else
+    # The CLI installer can create this directory in the image. Preserve any
+    # existing credentials before replacing that ephemeral directory with the
+    # link into the persistent app-data volume.
+    if [ -d /root/.coderabbit ]; then
+        cp -an /root/.coderabbit/. /app/data/coderabbit-cli/
+        rm -rf /root/.coderabbit
+    elif [ -e /root/.coderabbit ]; then
+        rm -f /root/.coderabbit
+    fi
     ln -s /app/data/coderabbit-cli /root/.coderabbit
 fi
 
@@ -32,14 +44,11 @@ else
     echo "   Browser OAuth is unavailable in Docker. Run 'coderabbit auth login' on the Docker host, or mount an existing CLI login."
 fi
 
-# Authenticate GitHub CLI / git credentials if GITHUB_TOKEN is provided
-if [ -n "$GITHUB_TOKEN" ]; then
-    echo "🔑 Configuring GitHub credentials..."
-    echo "https://x-access-token:${GITHUB_TOKEN}@github.com" > /root/.git-credentials
-    git config --global credential.helper store
-else
-    echo "⚠️ Warning: GITHUB_TOKEN is not set. GitHub API requests will be unauthenticated or fail."
-fi
+# GitHub access now uses the token loaded from persistent dashboard settings.
+# Remove legacy credential-helper copies so a replaced/cleared token is not
+# retained separately from the persistent token file.
+git config --global --unset-all credential.helper || true
+rm -f /root/.git-credentials
 
 echo "🚀 Starting CodeRabbit Auto-Review Web Dashboard on port ${PORT:-8765}..."
 exec python3 /app/web_dashboard.py

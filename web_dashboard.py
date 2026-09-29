@@ -41,7 +41,7 @@ class DashboardBackend:
     ):
         self.config_manager = config_manager or ConfigManager()
         self.state_manager = state_manager or StateManager()
-        self.github_client = github_client or GitHubClient()
+        self.github_client = github_client or GitHubClient(token=self.config_manager.get_github_token())
         self.review_engine = review_engine or AutoReviewEngine(
             config_manager=self.config_manager,
             state_manager=self.state_manager,
@@ -480,6 +480,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
 
         if path == "/api/config" or path == "/api/settings":
             updated = backend.config_manager.update_settings(data)
+            backend.github_client.set_token(backend.config_manager.get_github_token())
             self._set_headers(200)
             self.wfile.write(json.dumps(updated).encode("utf-8"))
             return
@@ -526,7 +527,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             # Instant GitHub API validation
             if not backend.repository_service.validate_repository(full_name):
                 self._set_headers(400)
-                self.wfile.write(json.dumps({"error": f"Repository '{full_name}' not found or inaccessible with current GITHUB_TOKEN"}).encode("utf-8"))
+                self.wfile.write(json.dumps({"error": f"Repository '{full_name}' not found or inaccessible with the configured GitHub token"}).encode("utf-8"))
                 return
 
             repo_entry = backend.repository_service.add_repository(full_name)

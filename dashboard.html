@@ -620,10 +620,20 @@
                 <button class="btn btn-sm" onclick="closeSettingsModal()">✕</button>
             </div>
             <div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1.25rem;">
-                Settings are stored in <code>config.json</code> on your persistent storage volume and take effect immediately at runtime.
+                Settings are saved to persistent storage and take effect immediately. GitHub credentials are stored separately from <code>config.json</code> and never shown again after saving.
             </div>
 
             <div style="display: flex; flex-direction: column; gap: 1.15rem;">
+                <div>
+                    <label for="setting-github-token" style="display:block; font-size:0.85rem; font-weight:600; margin-bottom:0.35rem;">GitHub Personal Access Token</label>
+                    <input type="password" id="setting-github-token" class="form-input" autocomplete="new-password" placeholder="Paste a token with repository access" style="max-width:100%;">
+                    <small id="github-token-state" style="display:block; color:var(--text-muted); font-size:0.75rem; margin-top:0.25rem;">Token is stored in persistent app settings. Leave blank to keep the current token.</small>
+                    <label id="github-token-clear-wrap" style="display:none; align-items:center; gap:0.45rem; margin-top:0.5rem; font-size:0.8rem; cursor:pointer;">
+                        <input type="checkbox" id="setting-clear-github-token" style="width:15px; height:15px; accent-color:var(--primary);">
+                        Remove the saved GitHub token
+                    </label>
+                </div>
+
                 <div>
                     <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem;">Polling Interval (Seconds)</label>
                     <div style="display: flex; gap: 0.5rem; align-items: center;">
@@ -1283,6 +1293,12 @@
 
         function loadSettingsIntoModal(cfg) {
             if (!cfg) return;
+            document.getElementById('setting-github-token').value = '';
+            document.getElementById('setting-clear-github-token').checked = false;
+            document.getElementById('github-token-clear-wrap').style.display = cfg.github_token_configured ? 'flex' : 'none';
+            document.getElementById('github-token-state').textContent = cfg.github_token_configured
+                ? 'A token is saved in persistent app storage. Leave blank to keep it or enter a replacement.'
+                : 'No token is saved. Enter a GitHub token with repository access.';
             document.getElementById('setting-poll-interval').value = cfg.poll_interval_seconds || 900;
             document.getElementById('setting-max-files').value = cfg.max_files_limit || 100;
             document.getElementById('setting-auto-approve').checked = (cfg.auto_approve !== false);
@@ -1301,6 +1317,14 @@
             const maxFiles = parseInt(document.getElementById('setting-max-files').value, 10);
             const autoApprove = document.getElementById('setting-auto-approve').checked;
             const strictApproval = document.getElementById('setting-strict-approval').checked;
+            const githubToken = document.getElementById('setting-github-token').value.trim();
+            const clearGithubToken = document.getElementById('setting-clear-github-token').checked;
+
+            if (clearGithubToken && githubToken) {
+                msgEl.style.color = '#fbbf24';
+                msgEl.textContent = 'Enter a replacement token or select removal, not both.';
+                return;
+            }
 
             if (isNaN(pollInterval) || pollInterval < 10) {
                 msgEl.style.color = '#ef4444';
@@ -1319,11 +1343,13 @@
                 poll_interval_seconds: pollInterval,
                 max_files_limit: maxFiles,
                 auto_approve: autoApprove,
-                strict_approval: strictApproval
+                strict_approval: strictApproval,
+                github_token: githubToken,
+                clear_github_token: clearGithubToken
             };
 
             msgEl.style.color = '#38bdf8';
-            msgEl.textContent = 'Saving settings to config.json...';
+            msgEl.textContent = 'Saving settings to persistent storage...';
             setButtonLoading(saveBtn, true, '<span class="spinner"></span>Saving...');
             showToast('Saving updated settings...', 'info');
 
@@ -1334,9 +1360,10 @@
                     body: JSON.stringify(payload)
                 });
                 const updated = await res.json();
+                document.getElementById('setting-github-token').value = '';
                 msgEl.style.color = '#10b981';
-                msgEl.textContent = 'Configuration saved successfully!';
-                showToast('Configuration saved successfully and applied!', 'success');
+                msgEl.textContent = 'Settings saved successfully!';
+                showToast('Settings saved securely and applied!', 'success');
                 loadSettingsIntoModal(updated);
                 await fetchStatus();
                 setTimeout(() => {

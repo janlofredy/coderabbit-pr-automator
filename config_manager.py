@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import tempfile
 from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger("config_manager")
@@ -23,8 +24,48 @@ class ConfigManager:
 
     def __init__(self, config_path: str = DEFAULT_CONFIG_FILE, repos_base_dir: str = DEFAULT_REPOS_BASE_DIR):
         self.config_path = config_path
+        self.github_token_path = os.path.join(os.path.dirname(os.path.abspath(config_path)), "github_token")
         self.repos_base_dir = repos_base_dir
         self.ensure_config_exists()
+
+    def get_github_token(self) -> str:
+        """Load the persisted token, migrating a legacy environment token once."""
+        if os.path.exists(self.github_token_path):
+            try:
+                with open(self.github_token_path, "r", encoding="utf-8") as token_file:
+                    return token_file.read().strip()
+            except OSError as e:
+                logger.error("Could not read persisted GitHub token: %s", e)
+                return ""
+
+        legacy_token = os.getenv("GITHUB_TOKEN", "").strip()
+        if legacy_token:
+            self.set_github_token(legacy_token)
+        return legacy_token
+
+    def set_github_token(self, token: str) -> None:
+        """Persist a GitHub token with owner-only file permissions."""
+        target_dir = os.path.dirname(os.path.abspath(self.github_token_path))
+        os.makedirs(target_dir, mode=0o700, exist_ok=True)
+        fd, temp_path = tempfile.mkstemp(prefix=".github_token.", dir=target_dir)
+        try:
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as token_file:
+                token_file.write(token.strip())
+                token_file.flush()
+                os.fsync(token_file.fileno())
+            os.replace(temp_path, self.github_token_path)
+            os.chmod(self.github_token_path, 0o600)
+        except Exception:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+            raise
 
     def _default_config(self) -> Dict[str, Any]:
         env_repos = os.getenv("REPOSITORIES", "")
@@ -183,7 +224,8 @@ class ConfigManager:
             "max_files_limit": int(cfg.get("max_files_limit", 100)),
             "auto_approve": bool(cfg.get("auto_approve", True)),
             "strict_approval": bool(cfg.get("strict_approval", True)),
-            "service_enabled": bool(cfg.get("service_enabled", True))
+            "service_enabled": bool(cfg.get("service_enabled", True)),
+            "github_token_configured": bool(self.get_github_token())
         }
 
     def update_settings(self, updates: Dict[str, Any]) -> Dict[str, Any]:
@@ -214,6 +256,10 @@ class ConfigManager:
         if "service_enabled" in updates:
             cfg["service_enabled"] = bool(updates["service_enabled"])
 
+        if updates.get("clear_github_token") is True:
+            self.set_github_token("")
+        elif isinstance(updates.get("github_token"), str) and updates["github_token"].strip():
+            self.set_github_token(updates["github_token"])
+
         self.save_config(cfg)
         return self.get_settings()
-

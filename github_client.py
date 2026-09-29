@@ -13,7 +13,12 @@ class GitHubClient:
     """GitHub REST API Client using Python standard library."""
 
     def __init__(self, token: Optional[str] = None):
-        self.token = token or os.getenv("GITHUB_TOKEN", "")
+        self.token = token if token is not None else os.getenv("GITHUB_TOKEN", "")
+        self._current_user = None
+
+    def set_token(self, token: str) -> None:
+        """Update API credentials and invalidate the cached GitHub profile."""
+        self.token = token or ""
         self._current_user = None
 
     def _headers(self) -> Dict[str, str]:

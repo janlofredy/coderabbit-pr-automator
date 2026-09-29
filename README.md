@@ -64,9 +64,8 @@ Deploying to CasaOS is a single copy-paste operation:
 3. In the top-right corner of the App Store, click **Custom Install**.
 4. Click **Import** in the top-right corner of the modal.
 5. Copy and paste the complete contents of [`casaos-compose.yml`](casaos-compose.yml) into the box.
-6. Replace `YOUR_GITHUB_TOKEN_HERE` with your GitHub Personal Access Token (classic with `repo` scope or fine-grained token).
-7. Click **Install**.
-8. Once installed, the **CodeRabbit Auto-Reviewer** tile appears on your CasaOS dashboard with the official icon and opens directly to `http://<casaos-ip>:8765`.
+6. Click **Install**.
+7. Once installed, open the **CodeRabbit Auto-Reviewer** tile at `http://<casaos-ip>:8765`, then add your GitHub token in **Settings**.
 
 ---
 
@@ -83,11 +82,7 @@ Copy the example environment file:
 ```bash
 cp .env.example .env
 ```
-Edit `.env` with your GitHub token:
-```env
-GITHUB_TOKEN=ghp_yourPersonalAccessTokenHere
-```
-*(All other settings including monitored repositories, scan intervals, limits, and approval policies are managed directly from the Web Dashboard).*
+GitHub authentication is configured in **Settings** after the dashboard starts. Existing installations with `GITHUB_TOKEN` in `.env` are migrated automatically to the persistent config directory the first time the updated container starts. All other settings including monitored repositories, scan intervals, limits, and approval policies are managed directly from the Web Dashboard.
 
 ### 3. Start the Container
 ```bash
@@ -101,14 +96,14 @@ Access the dashboard at `http://localhost:8765`.
 ## 🔑 Authentication Options
 
 ### 1. GitHub Authentication
-Requires a **GitHub Personal Access Token** (Classic or Fine-Grained) with:
-- `repo` scope (for private repositories) or `public_repo` (for public repositories).
-- Set via `GITHUB_TOKEN` environment variable.
+Open **Settings** in the dashboard and enter a GitHub Personal Access Token with repository access (`repo` for private repositories or `public_repo` for public repositories). The token is saved in the persistent configuration storage with owner-only file permissions and is never returned by the settings API. Existing `GITHUB_TOKEN` environment values are automatically migrated there on startup.
 
 ### 2. CodeRabbit Authentication
 The CodeRabbit CLI disables browser OAuth inside Docker/CI. Run `coderabbit auth login` on the Docker host, choose **Continue with Google** in the browser, and verify with `coderabbit auth status`. The default Compose file mounts the host's `~/.coderabbit` directory directly into the container, so no copy is needed. If `CODERABBIT_CLI_HOME` points to a different host path, copy the authenticated `.coderabbit` contents there. EU users can run `coderabbit auth login --region eu` on the host.
 
-The CasaOS compose file uses one storage mount, `/DATA/AppData/coderabbit:/app/data`. Inside it, app settings are stored under `config`, review reports under `reviews`, repository checkouts under `repos`, and CodeRabbit CLI credentials under `coderabbit-cli`. Authenticate with `coderabbit auth login` on a machine with a browser, then securely copy that machine's `.coderabbit` directory contents to `/DATA/AppData/coderabbit/coderabbit-cli/`. Keep the CLI state private; it contains login credentials.
+The CasaOS compose file uses one storage mount, `/DATA/AppData/coderabbit:/app/data`. Inside it, app settings are stored under `config`, review reports under `reviews`, repository checkouts under `repos`, and CodeRabbit CLI credentials under `coderabbit-cli`. The container links `/root/.coderabbit` to this persistent directory, so credentials survive image/container updates. Authenticate with `coderabbit auth login` on a machine with a browser, then securely copy that machine's `.coderabbit` directory contents to `/DATA/AppData/coderabbit/coderabbit-cli/`. Keep the CLI state private; it contains login credentials.
+
+Before upgrading an existing CasaOS container created by an older release, preserve any login stored only in the old container with `mkdir -p /DATA/AppData/coderabbit/coderabbit-cli && docker cp coderabbit-pr-automator:/root/.coderabbit/. /DATA/AppData/coderabbit/coderabbit-cli/`. Do this while the old container is still running; after container replacement, files from its writable layer cannot be recovered.
 
 The dashboard header shows the current CodeRabbit CLI auth status. Click the status bar for these instructions. For headless or bot-driven authentication, use an Agentic API key with `coderabbit auth login --api-key "<key>"`; see the [CLI auth reference](https://docs.coderabbit.ai/cli/reference).
 
@@ -118,7 +113,7 @@ The dashboard header shows the current CodeRabbit CLI auth status. Click the sta
 
 | Variable | Description | Default |
 | :--- | :--- | :--- |
-| `GITHUB_TOKEN` | GitHub Personal Access Token (`repo` scope) | *Required* |
+| `GITHUB_TOKEN` | Legacy GitHub token automatically migrated to persistent settings; new setups should use the dashboard Settings | Optional |
 | `CODERABBIT_CLI_HOME` | Host path containing the authenticated CodeRabbit CLI state mounted by Docker Compose | `${HOME}/.coderabbit` |
 
 > 💡 **Note**: Repository settings, polling intervals, max file limits, auto-approvals, and strict approval mode are persisted in the app's mounted data directory and can be changed live from the Web Dashboard without recreating or restarting the container. CodeRabbit authentication is managed by the CLI, outside the dashboard.

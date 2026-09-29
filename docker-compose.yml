@@ -11,7 +11,8 @@ services:
     ports:
       - "${PORT:-8765}:8765"
     environment:
-      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      # Optional legacy import; new tokens are saved from the dashboard.
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
     volumes:
       - ./data/config:/app/data/config
       - ./data/reviews:/app/data/reviews
