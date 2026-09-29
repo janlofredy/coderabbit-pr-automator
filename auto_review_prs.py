@@ -35,6 +35,7 @@ class AutoReviewEngine:
         self.github_client = github_client or GitHubClient()
         self.reviews_dir = reviews_dir
         self.cli_timeout = cli_timeout
+        self.last_checkout_error = ""
         os.makedirs(self.reviews_dir, exist_ok=True)
 
     def run_git(self, repo_dir: str, args: List[str], check: bool = True) -> subprocess.CompletedProcess:
@@ -82,6 +83,7 @@ class AutoReviewEngine:
 
     def checkout_pr(self, repo_path: str, pr_number: int, base_ref: str) -> bool:
         """Fetches the PR head ref and checks it out locally."""
+        self.last_checkout_error = ""
         try:
             # Fetch base branch
             self.run_git(repo_path, ["fetch", "origin", base_ref])
@@ -93,7 +95,9 @@ class AutoReviewEngine:
             self.run_git(repo_path, ["clean", "-fd"])
             return True
         except subprocess.CalledProcessError as e:
-            logger.error("Git error checking out PR #%s in %s: %s", pr_number, repo_path, e.stderr)
+            detail = (e.stderr or e.stdout or str(e)).strip()
+            self.last_checkout_error = f"git {' '.join(e.cmd[1:])}: {detail}"
+            logger.error("Git error checking out PR #%s in %s: %s", pr_number, repo_path, self.last_checkout_error)
             return False
 
     def count_changed_files(self, repo_path: str, base_ref: str, pr_number: int) -> int:
@@ -458,8 +462,19 @@ class AutoReviewEngine:
         )
         if not self.checkout_pr(repo_path, pr_number, base_ref):
             self.state_manager.set_pr_reviewing(pr_key, False)
-            status_data = {"pr_key": pr_key, "status": "ERROR", "error": "Failed to checkout PR branch",
-                           "head_sha": head_sha, "title": pr.get("title", ""), "html_url": pr.get("html_url", "")}
+            checkout_error = self.last_checkout_error or "Git checkout failed; see application logs for details."
+            error_message = f"Failed to checkout PR branch: {checkout_error}"
+            status_data = {"pr_key": pr_key, "status": "ERROR", "error": error_message,
+                           "head_sha": head_sha, "base_ref": base_ref, "head_ref": head_ref,
+                           "author": pr_author, "is_own_pr": is_own_pr,
+                           "title": pr.get("title", ""), "html_url": pr.get("html_url", "")}
+            self.state_manager.record_pr_log(pr_key, {
+                "status": "ERROR", "review_outcome": "ERROR", "error": error_message,
+                "stderr": checkout_error, "stdout": "", "head_sha": head_sha,
+                "base_ref": base_ref, "head_ref": head_ref, "author": pr_author,
+                "title": pr.get("title", ""), "html_url": pr.get("html_url", ""),
+                "elapsed_seconds": 0, "file_count": 0
+            })
             self.state_manager.record_pr_status(pr_key, status_data)
             return status_data
 
