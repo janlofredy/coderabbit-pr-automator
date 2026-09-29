@@ -6,9 +6,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     CI=1 \
     CODERABBIT_INSTALL_DIR=/usr/local/bin \
-    CONFIG_DIR=/app/data \
+    CONFIG_DIR=/app/data/config \
     REVIEWS_DIR=/app/data/reviews \
-    REPOS_DIR=/app/repos \
+    REPOS_DIR=/app/data/repos \
     PORT=8765 \
     PATH="/usr/local/bin:$PATH"
 
@@ -40,7 +40,7 @@ COPY assets /app/assets/
 RUN chmod +x /app/entrypoint.sh
 
 # Create required volume directories
-RUN mkdir -p /root/.coderabbit /app/data/reviews /app/repos
+RUN mkdir -p /app/data/config /app/data/reviews /app/data/repos /app/repos
 
 # Expose Web Dashboard Port
 EXPOSE 8765

@@ -9,15 +9,13 @@ echo "=========================================================="
 mkdir -p /app/data/config /app/data/reviews /app/data/repos
 mkdir -p /app/repos
 
-# In the single-volume CasaOS layout, keep CodeRabbit's normal ~/.coderabbit
-# path mapped to its dedicated subdirectory beside the app's data folders.
-if [ "${HOME:-}" = "/app/data" ]; then
+# In the single-volume CasaOS layout, link CodeRabbit's standard home to its
+# dedicated subdirectory. Docker Compose may instead mount ~/.coderabbit here.
+if [ -L /root/.coderabbit ]; then
+    ln -sfn /app/data/coderabbit-cli /root/.coderabbit
+elif [ ! -e /root/.coderabbit ]; then
     mkdir -p /app/data/coderabbit-cli
-    if [ -L /app/data/.coderabbit ]; then
-        ln -sfn /app/data/coderabbit-cli /app/data/.coderabbit
-    elif [ ! -e /app/data/.coderabbit ]; then
-        ln -s /app/data/coderabbit-cli /app/data/.coderabbit
-    fi
+    ln -s /app/data/coderabbit-cli /root/.coderabbit
 fi
 
 # Configure basic git identity for diffing & fetching
@@ -26,7 +24,7 @@ git config --global user.email "${GIT_USER_EMAIL:-coderabbit-bot@users.noreply.g
 git config --global init.defaultBranch main
 
 # Use the user's manually authenticated CodeRabbit CLI state in its configured home.
-CLI_AUTH_DIR="${HOME:-/root}/.coderabbit"
+CLI_AUTH_DIR="/root/.coderabbit"
 if [ -f "${CLI_AUTH_DIR}/auth.json" ]; then
     echo "🔑 Found mounted CodeRabbit CLI login at ${CLI_AUTH_DIR}/auth.json"
 else

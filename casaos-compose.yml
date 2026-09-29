@@ -9,10 +9,6 @@ services:
       - "8765:8765"
     environment:
       - GITHUB_TOKEN=YOUR_GITHUB_TOKEN_HERE
-      - HOME=/app/data
-      - CONFIG_DIR=/app/data/config
-      - REVIEWS_DIR=/app/data/reviews
-      - REPOS_DIR=/app/data/repos
     volumes:
       - /DATA/AppData/coderabbit:/app/data
 

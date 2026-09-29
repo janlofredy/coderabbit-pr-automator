@@ -13,7 +13,7 @@ services:
     environment:
       - GITHUB_TOKEN=${GITHUB_TOKEN}
     volumes:
-      - ./data/config:/app/data
+      - ./data/config:/app/data/config
       - ./data/reviews:/app/data/reviews
       - ${CODERABBIT_CLI_HOME:-${HOME}/.coderabbit}:/root/.coderabbit
-      - ./data/repos:/app/repos
+      - ./data/repos:/app/data/repos
