@@ -510,6 +510,7 @@
         <div class="header-actions">
             <span id="service-status-pill" class="badge badge-green">RUNNING</span>
             <span id="strict-mode-pill" class="badge badge-purple" title="Strict Mode: PRs with any minor issue are not approved">STRICT: ON</span>
+            <button id="btn-coderabbit-login" class="btn btn-sm" onclick="openCodeRabbitLogin()">🐰 Login with Google</button>
             <button id="btn-settings" class="btn btn-sm" onclick="openSettingsModal()">⚙️ Settings</button>
             <button id="btn-repos" class="btn btn-sm" onclick="openRepoModal()">📁 Repositories</button>
             <button id="btn-toggle-service" class="btn btn-sm" onclick="toggleService()">Pause Service</button>
@@ -584,6 +585,22 @@
                 <button class="btn btn-primary" onclick="addRepo()">Add Repo</button>
             </div>
             <div id="repo-modal-msg" style="margin-top: 0.75rem; font-size: 0.85rem;"></div>
+        </div>
+    </div>
+
+    <!-- CodeRabbit CLI Authentication Modal -->
+    <div id="coderabbit-auth-modal" class="modal-overlay">
+        <div class="modal" style="max-width: 520px;">
+            <div class="modal-header">
+                <h3>🐰 CodeRabbit Login</h3>
+                <button class="btn btn-sm" onclick="closeCodeRabbitLogin()">✕</button>
+            </div>
+            <p style="color: var(--text-muted);">Sign in to CodeRabbit in the browser window. Choose <strong>Continue with Google</strong> on the CodeRabbit page to authenticate the CLI.</p>
+            <div id="coderabbit-auth-message" style="margin: 1rem 0;">Preparing sign-in…</div>
+            <a id="coderabbit-auth-link" class="btn btn-primary" href="#" target="_blank" rel="noopener noreferrer" style="display:none; text-decoration:none;">Open CodeRabbit sign-in</a>
+            <div style="display:flex; justify-content:flex-end; margin-top:1.25rem;">
+                <button class="btn btn-secondary" onclick="closeCodeRabbitLogin()">Close</button>
+            </div>
         </div>
     </div>
 
@@ -1200,7 +1217,53 @@
         }
 
         /* Settings Modal */
-        async function openSettingsModal() {
+    let coderabbitAuthPoll = null;
+    async function openCodeRabbitLogin() {
+        document.getElementById('coderabbit-auth-modal').classList.add('active');
+        const message = document.getElementById('coderabbit-auth-message');
+        const link = document.getElementById('coderabbit-auth-link');
+        message.textContent = 'Preparing sign-in…';
+        link.style.display = 'none';
+        try {
+            const response = await fetch('/api/coderabbit-auth/login', { method: 'POST' });
+            const state = await response.json();
+            if (!response.ok) throw new Error(state.message || 'Could not start CodeRabbit login.');
+            showCodeRabbitAuthState(state);
+            if (coderabbitAuthPoll) clearInterval(coderabbitAuthPoll);
+            coderabbitAuthPoll = setInterval(pollCodeRabbitAuth, 1500);
+        } catch (error) {
+            message.textContent = error.message;
+        }
+    }
+    function showCodeRabbitAuthState(state) {
+        const message = document.getElementById('coderabbit-auth-message');
+        const link = document.getElementById('coderabbit-auth-link');
+        message.textContent = state.status === 'authenticated' ? 'Signed in successfully. The review service will use this CLI login.' : (state.message || 'Waiting for CodeRabbit sign-in…');
+        if (state.url) {
+            try {
+                const parsed = new URL(state.url);
+                if (parsed.protocol === 'https:') {
+                    link.href = parsed.href;
+                    link.style.display = 'inline-block';
+                }
+            } catch (_) { /* Ignore malformed CLI output. */ }
+        }
+        if (state.status === 'authenticated' || state.status === 'error') {
+            if (coderabbitAuthPoll) clearInterval(coderabbitAuthPoll);
+            coderabbitAuthPoll = null;
+        }
+    }
+    async function pollCodeRabbitAuth() {
+        try {
+            const response = await fetch('/api/coderabbit-auth');
+            showCodeRabbitAuthState(await response.json());
+        } catch (_) { /* A later poll can recover from temporary connection errors. */ }
+    }
+    function closeCodeRabbitLogin() {
+        document.getElementById('coderabbit-auth-modal').classList.remove('active');
+    }
+
+    async function openSettingsModal() {
             document.getElementById('settings-modal').classList.add('active');
             document.getElementById('settings-modal-msg').textContent = '';
             try {

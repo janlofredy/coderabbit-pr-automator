@@ -3,6 +3,8 @@ import json
 import time
 import threading
 import logging
+import re
+import subprocess
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -62,6 +64,9 @@ class DashboardBackend:
             executor=self._executor,
         )
         self._is_running = True
+        self._auth_lock = threading.Lock()
+        self._auth_process = None
+        self._auth_state = {"status": "idle", "url": None, "message": ""}
 
         # Start continuous background worker
         self._worker_thread = None
@@ -99,6 +104,53 @@ class DashboardBackend:
     def run_review_scan(self, force: bool = False, pr_key: Optional[str] = None) -> bool:
         """Compatibility facade; review scheduling lives in its service."""
         return self.review_service.run_review_scan(force=force, pr_key=pr_key)
+
+    def start_coderabbit_login(self) -> Dict[str, Any]:
+        """Start the official CodeRabbit browser OAuth flow for dashboard users."""
+        with self._auth_lock:
+            if self._auth_process and self._auth_process.poll() is None:
+                return dict(self._auth_state)
+            try:
+                process = subprocess.Popen(
+                    ["coderabbit", "auth", "login", "--agent"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                )
+            except FileNotFoundError:
+                self._auth_state = {"status": "error", "url": None, "message": "CodeRabbit CLI is not installed."}
+                return dict(self._auth_state)
+            self._auth_process = process
+            self._auth_state = {"status": "starting", "url": None, "message": "Starting CodeRabbit sign-in…"}
+            threading.Thread(target=self._read_coderabbit_login, args=(process,), daemon=True).start()
+            return dict(self._auth_state)
+
+    def _read_coderabbit_login(self, process) -> None:
+        for line in process.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            url_match = re.search(r"https?://[^\s\"'<>]+", line)
+            with self._auth_lock:
+                if url_match:
+                    self._auth_state["url"] = url_match.group(0).rstrip(".,)")
+                    self._auth_state["status"] = "waiting"
+                    self._auth_state["message"] = "Open the sign-in page and choose Continue with Google."
+                else:
+                    self._auth_state["message"] = line[:500]
+        code = process.wait()
+        with self._auth_lock:
+            if code == 0:
+                self._auth_state = {"status": "authenticated", "url": None, "message": "CodeRabbit login completed."}
+            else:
+                self._auth_state["status"] = "error"
+                if not self._auth_state.get("message"):
+                    self._auth_state["message"] = f"CodeRabbit login exited with status {code}."
+
+    def get_coderabbit_login(self) -> Dict[str, Any]:
+        with self._auth_lock:
+            return dict(self._auth_state)
 
     def get_annotated_status(self) -> Dict[str, Any]:
         """Overlays real-time state manager data onto cached PR records for sub-millisecond response."""
@@ -388,6 +440,11 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(cfg_data).encode("utf-8"))
             return
 
+        if path == "/api/coderabbit-auth":
+            self._set_headers(200)
+            self.wfile.write(json.dumps(backend.get_coderabbit_login()).encode("utf-8"))
+            return
+
 
         if path == "/api/repos":
             repos = backend.repository_service.get_repositories()
@@ -429,6 +486,12 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self._set_headers(200 if accepted else 409)
             response_status = "queued" if accepted and pr_key else "triggered" if accepted else "already_queued_or_busy"
             self.wfile.write(json.dumps({"status": response_status, "force": force, "pr_key": pr_key}).encode("utf-8"))
+            return
+
+        if path == "/api/coderabbit-auth/login":
+            result = backend.start_coderabbit_login()
+            self._set_headers(200 if result.get("status") != "error" else 500)
+            self.wfile.write(json.dumps(result).encode("utf-8"))
             return
 
         if path == "/api/clear-rate-limit":

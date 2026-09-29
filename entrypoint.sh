@@ -29,7 +29,7 @@ if [ -f "${CLI_AUTH_DIR}/auth.json" ]; then
     echo "🔑 Found mounted CodeRabbit CLI login at ${CLI_AUTH_DIR}/auth.json"
 else
     echo "⚠️ No CodeRabbit CLI login found at ${CLI_AUTH_DIR}/auth.json."
-    echo "   Run 'coderabbit auth login' on a machine with a browser, then copy its .coderabbit state into the configured CLI home."
+    echo "   Open the dashboard and use 'Login with Google' to authenticate the CLI, or mount an existing CLI login."
 fi
 
 # Authenticate GitHub CLI / git credentials if GITHUB_TOKEN is provided
