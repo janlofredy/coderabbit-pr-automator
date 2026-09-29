@@ -414,20 +414,41 @@ class AutoReviewEngine:
             self.state_manager.record_pr_status(pr_key, status_data)
             return status_data
 
+        # Show each PR's work as it moves through the review pipeline.
+        attempt = self.state_manager.get_attempt_count(pr_key) + 1
+        self.state_manager.set_pr_reviewing(
+            pr_key, True, attempt, "PREPARING_REPOSITORY", "Preparing local repository checkout"
+        )
+
         # Prepare repository clone
         if not self.prepare_repo(full_name, repo_path):
-            return {"pr_key": pr_key, "status": "ERROR", "error": "Failed to prepare repository"}
+            self.state_manager.set_pr_reviewing(pr_key, False)
+            status_data = {"pr_key": pr_key, "status": "ERROR", "error": "Failed to prepare repository",
+                           "head_sha": head_sha, "title": pr.get("title", ""), "html_url": pr.get("html_url", "")}
+            self.state_manager.record_pr_status(pr_key, status_data)
+            return status_data
 
         # Checkout PR
+        self.state_manager.set_pr_reviewing(
+            pr_key, True, attempt, "CHECKING_OUT_PR", f"Checking out pull request #{pr_number}"
+        )
         if not self.checkout_pr(repo_path, pr_number, base_ref):
-            return {"pr_key": pr_key, "status": "ERROR", "error": "Failed to checkout PR branch"}
+            self.state_manager.set_pr_reviewing(pr_key, False)
+            status_data = {"pr_key": pr_key, "status": "ERROR", "error": "Failed to checkout PR branch",
+                           "head_sha": head_sha, "title": pr.get("title", ""), "html_url": pr.get("html_url", "")}
+            self.state_manager.record_pr_status(pr_key, status_data)
+            return status_data
 
         # 100-File Free-Tier Ceiling Guard
+        self.state_manager.set_pr_reviewing(
+            pr_key, True, attempt, "CHECKING_REVIEW_LIMITS", "Checking changed-file limits"
+        )
         changed_files_count = self.count_changed_files(repo_path, base_ref, pr_number)
         api_files_count = pr.get("changed_files", 0)
         file_count = max(changed_files_count, api_files_count)
 
         if file_count > max_files_limit:
+            self.state_manager.set_pr_reviewing(pr_key, False)
             logger.warning("PR %s has %d files (limit %d). Skipping review.", pr_key, file_count, max_files_limit)
             skip_comment = f"""🐰 **Automated CodeRabbit Review Skipped**
 - **Reviewer**: @{auth_user or 'coderabbit-bot'}
@@ -454,8 +475,9 @@ class AutoReviewEngine:
             return status_data
 
         # Post or update start comment to notify progress
-        attempt = self.state_manager.get_attempt_count(pr_key) + 1
-        self.state_manager.set_pr_reviewing(pr_key, True, attempt)
+        self.state_manager.set_pr_reviewing(
+            pr_key, True, attempt, "STARTING_REVIEW", "Starting CodeRabbit review"
+        )
 
         in_progress_comment = f"""🐰 **Automated CodeRabbit Review In Progress**
 - **Reviewer**: @{auth_user or 'coderabbit-bot'}
@@ -468,6 +490,9 @@ class AutoReviewEngine:
         comment_id = bot_comment.get("id")
 
         # Run CodeRabbit CLI
+        self.state_manager.set_pr_reviewing(
+            pr_key, True, attempt, "RUNNING_CODERABBIT", "CodeRabbit is analyzing the pull request"
+        )
         start_time = time.time()
         retcode, stdout, stderr = self.execute_coderabbit_cli(repo_path, base_ref)
         elapsed = time.time() - start_time
@@ -653,6 +678,9 @@ class AutoReviewEngine:
                 review_outcome = "APPROVED (Self PR: Commented)" if is_own_pr else "COMMENTED"
 
         # Generate HTML report
+        self.state_manager.set_pr_reviewing(
+            pr_key, True, attempt, "PREPARING_FINDINGS", "Preparing findings and review summary"
+        )
         report_file = self.generate_html_report(
             full_name,
             pr_number,
@@ -675,6 +703,9 @@ class AutoReviewEngine:
 - **Execution Time**: {elapsed:.1f}s
 {summary_text}
 """
+        self.state_manager.set_pr_reviewing(
+            pr_key, True, attempt, "PUBLISHING_REVIEW", "Posting review and inline comments to GitHub"
+        )
         try:
             self.github_client.submit_pull_request_review(
                 owner=owner,

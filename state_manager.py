@@ -164,13 +164,18 @@ class StateManager:
             state["attempt_counts"] = counts
             self.save_state(state)
 
-    def set_pr_reviewing(self, pr_key: str, is_reviewing: bool, attempt: int = 1) -> None:
+    def set_pr_reviewing(self, pr_key: str, is_reviewing: bool, attempt: int = 1,
+                         phase: str = "RUNNING_CODERABBIT", message: str = "") -> None:
         state = self.load_state()
         active = state.get("active_reviews", {})
         if is_reviewing:
+            previous = active.get(pr_key, {})
             active[pr_key] = {
-                "started_at": time.time(),
-                "attempt": attempt
+                "started_at": previous.get("started_at", time.time()),
+                "updated_at": time.time(),
+                "attempt": attempt,
+                "phase": phase,
+                "message": message
             }
         else:
             active.pop(pr_key, None)

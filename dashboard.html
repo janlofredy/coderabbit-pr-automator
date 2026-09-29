@@ -375,6 +375,13 @@
             margin-bottom: 1.25rem;
         }
 
+        .pr-status-description {
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            line-height: 1.45;
+            margin: -0.7rem 0 1rem;
+        }
+
         .pr-actions {
             display: flex;
             align-items: center;
@@ -485,9 +492,9 @@
         <div>
             <span class="spinner" style="border-top-color: #a5b4fc;"></span>
             <strong>Review Engine Active:</strong>
-            <span id="processing-banner-text" style="margin-left: 0.5rem;">Reviewing pull requests in the background...</span>
+            <span id="processing-banner-text" style="margin-left: 0.5rem;">Checking repositories for open pull requests...</span>
         </div>
-        <span class="badge badge-purple" style="font-size: 0.75rem;">SCANNING</span>
+        <span id="processing-banner-state" class="badge badge-purple" style="font-size: 0.75rem;">CHECKING REPOS</span>
     </div>
 
     <div id="rate-limit-banner" class="banner-rate-limit hidden">
@@ -731,17 +738,55 @@
             // Processing / Scan Active Banner
             const processingBanner = document.getElementById('processing-banner');
             const processingBannerText = document.getElementById('processing-banner-text');
-            const hasActiveReviews = (data.pull_requests || []).some(p => p.status_badge === 'REVIEW_IN_PROGRESS');
-            const isScanning = Boolean(data.scan_in_progress || hasActiveReviews);
+            const processingBannerState = document.getElementById('processing-banner-state');
+            const activeReviews = (data.pull_requests || []).filter(p => p.status_badge === 'REVIEW_IN_PROGRESS');
+            const isScanning = Boolean(data.scan_in_progress || activeReviews.length);
 
             if (processingBanner) {
                 if (isScanning) {
                     processingBanner.classList.remove('hidden');
-                    if (hasActiveReviews) {
-                        const inProgressPr = (data.pull_requests || []).find(p => p.status_badge === 'REVIEW_IN_PROGRESS');
-                        processingBannerText.textContent = `Reviewing ${inProgressPr.pr_key} in local CodeRabbit CLI...`;
+                    if (activeReviews.length) {
+                        const inProgressPr = activeReviews[0];
+                        const prTitle = inProgressPr.title ? ` “${inProgressPr.title}”` : '';
+                        const phaseText = inProgressPr.status_description || inProgressPr.status_label || 'Review in progress';
+                        const attemptText = `Attempt ${inProgressPr.attempt || 1} of 3`;
+                        const activeCount = activeReviews.length > 1 ? ` ${activeReviews.length} PR reviews are active.` : '';
+                        processingBannerText.textContent = `${inProgressPr.pr_key}${prTitle} — ${phaseText}. ${attemptText}.${activeCount}`;
+                        if (processingBannerState) {
+                            const phaseNames = {
+                                PREPARING_REPOSITORY: 'PREPARING REPO',
+                                CHECKING_OUT_PR: 'CHECKING OUT PR',
+                                CHECKING_REVIEW_LIMITS: 'CHECKING LIMITS',
+                                STARTING_REVIEW: 'STARTING REVIEW',
+                                RUNNING_CODERABBIT: 'RUNNING CODERABBIT',
+                                PREPARING_FINDINGS: 'PREPARING FINDINGS',
+                                PUBLISHING_REVIEW: 'POSTING REVIEW'
+                            };
+                            processingBannerState.textContent = phaseNames[inProgressPr.review_phase] || 'REVIEWING PR';
+                            processingBannerState.className = 'badge badge-blue';
+                        }
                     } else {
-                        processingBannerText.textContent = 'Review scanner running across repositories...';
+                        const enabledRepoCount = (data.repositories || []).filter(repo => repo.enabled).length;
+                        const scanMessages = {
+                            CHECKING_REPOSITORIES: 'Checking enabled repositories and connecting to GitHub.',
+                            LOADING_SELECTED_PULL_REQUEST: 'Refreshing the selected pull request details before review.',
+                            REVIEWING_SELECTED_PULL_REQUEST: 'Starting the selected pull request review.',
+                            DISCOVERING_PULL_REQUESTS: 'Finding open pull requests and checking which ones need a review.',
+                            REFRESHING_PR_STATUS: 'Refreshing pull request statuses after the scan.'
+                        };
+                        const scanMessage = scanMessages[data.scan_phase] || `Checking ${enabledRepoCount} enabled ${enabledRepoCount === 1 ? 'repository' : 'repositories'} for open pull requests.`;
+                        processingBannerText.textContent = `${scanMessage} ${enabledRepoCount} enabled ${enabledRepoCount === 1 ? 'repository' : 'repositories'} configured.`;
+                        if (processingBannerState) {
+                            const scanLabels = {
+                                CHECKING_REPOSITORIES: 'CHECKING REPOS',
+                                LOADING_SELECTED_PULL_REQUEST: 'LOADING PR',
+                                REVIEWING_SELECTED_PULL_REQUEST: 'STARTING PR REVIEW',
+                                DISCOVERING_PULL_REQUESTS: 'FINDING PRS',
+                                REFRESHING_PR_STATUS: 'UPDATING STATUS'
+                            };
+                            processingBannerState.textContent = scanLabels[data.scan_phase] || 'CHECKING REPOS';
+                            processingBannerState.className = 'badge badge-purple';
+                        }
                     }
                 } else {
                     processingBanner.classList.add('hidden');
@@ -785,7 +830,7 @@
                 case 'RATE_LIMITED':
                     return { class: 'badge-orange', text: `⏳ Rate Limited (${pr.status_label || 'Retrying'})` };
                 case 'REVIEW_IN_PROGRESS':
-                    return { class: 'badge-blue', text: `⚡ Review in Progress (Attempt ${pr.attempt || 1}/3)` };
+                    return { class: 'badge-blue', text: `⚡ ${pr.status_label || 'Review in Progress'} (Attempt ${pr.attempt || 1}/3)` };
                 case 'OTHER_CHANGES_REQUESTED':
                     return { class: 'badge-red', text: `❌ ${pr.status_label || 'Changes Requested'}` };
                 case 'APPROVED':
@@ -794,6 +839,10 @@
                     return { class: 'badge-yellow', text: '💬 Comments Posted' };
                 case 'SKIPPED_MAX_FILES':
                     return { class: 'badge-red', text: '🛑 Skipped (>100 Files)' };
+                case 'REVIEW_FAILED':
+                    return { class: 'badge-red', text: '❌ Review Failed' };
+                case 'ALREADY_REVIEWED':
+                    return { class: 'badge-purple', text: '✓ Already Reviewed' };
                 case 'OWN_PR':
                     return { class: 'badge-purple', text: '👤 Your PR (Author)' };
                 default:
@@ -823,9 +872,13 @@
                 if (pr.status_badge === 'RATE_LIMITED') {
                     pills.push(`<span class="badge badge-orange">⏳ Rate Limited (${escapeHtml(pr.status_label || 'Retrying')})</span>`);
                 } else if (pr.status_badge === 'REVIEW_IN_PROGRESS') {
-                    pills.push(`<span class="badge badge-blue">⚡ Review in Progress (Attempt ${pr.attempt || 1}/3)</span>`);
+                    pills.push(`<span class="badge badge-blue">⚡ ${escapeHtml(pr.status_label || 'Review in Progress')} (Attempt ${pr.attempt || 1}/3)</span>`);
                 } else if (pr.status_badge === 'SKIPPED_MAX_FILES') {
-                    pills.push(`<span class="badge badge-red">🛑 Skipped (>100 Files)</span>`);
+                    pills.push(`<span class="badge badge-red">🛑 ${escapeHtml(pr.status_label || 'Skipped: file limit exceeded')}</span>`);
+                } else if (pr.status_badge === 'REVIEW_FAILED') {
+                    pills.push(`<span class="badge badge-red">❌ Review Failed</span>`);
+                } else if (pr.status_badge === 'ALREADY_REVIEWED') {
+                    pills.push(`<span class="badge badge-purple">✓ Already Reviewed</span>`);
                 } else if (pr.status_badge === 'OWN_PR') {
                     pills.push(`<span class="badge badge-purple">👤 Your PR (Author)</span>`);
                 }
@@ -893,6 +946,7 @@
                         <div class="pr-status-pills">
                             ${pills.join('')}
                         </div>
+                        ${pr.status_description ? `<div class="pr-status-description">${escapeHtml(pr.status_description)}</div>` : ''}
                     </div>
                     <div class="pr-actions">
                         <a href="/pr-details?pr_key=${encodeURIComponent(pr.pr_key)}" class="btn btn-sm btn-primary" title="View complete execution logs and review diagnostics">📋 Details & Logs</a>

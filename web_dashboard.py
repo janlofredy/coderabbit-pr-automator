@@ -50,6 +50,7 @@ class DashboardBackend:
         self._executor = ThreadPoolExecutor(max_workers=5)
         self._is_running = True
         self._scan_in_progress = False
+        self._scan_phase = "IDLE"
 
         # Start continuous background worker
         self._worker_thread = None
@@ -156,25 +157,33 @@ class DashboardBackend:
 
         def task():
             self._scan_in_progress = True
+            self._scan_phase = "CHECKING_REPOSITORIES"
             try:
                 self.refresh_pr_cache()
                 if pr_key:
+                    self._scan_phase = "LOADING_SELECTED_PULL_REQUEST"
                     with self._cache_lock:
                         target = next((p for p in self._cached_prs if p["pr_key"] == pr_key), None)
                     if target:
                         repo_info = next((r for r in self.config_manager.get_repos() if r["full_name"] == target["repo"]), None)
                         if repo_info:
+                            self._scan_phase = "REVIEWING_SELECTED_PULL_REQUEST"
                             # Fetch full PR object
                             owner, repo_name = GitHubClient.split_repo(target["repo"])
                             full_pr = self.github_client.get_pr(owner, repo_name, target["number"])
                             self.review_engine.review_single_pr(repo_info, full_pr, force=force)
                 else:
+                    self._scan_phase = "DISCOVERING_PULL_REQUESTS"
                     self.review_engine.scan_and_review_all(force=force)
             except Exception as e:
                 logger.error("Error in review scan task: %s", e)
             finally:
-                self._scan_in_progress = False
-                self.refresh_pr_cache()
+                self._scan_phase = "REFRESHING_PR_STATUS"
+                try:
+                    self.refresh_pr_cache()
+                finally:
+                    self._scan_phase = "IDLE"
+                    self._scan_in_progress = False
 
         self._executor.submit(task)
 
@@ -206,38 +215,73 @@ class DashboardBackend:
 
             # Determine dynamic status badge
             if key in active_reviews:
-                attempt = active_reviews[key].get("attempt", 1)
+                active = active_reviews[key]
+                attempt = active.get("attempt", 1)
+                phase = active.get("phase", "RUNNING_CODERABBIT")
+                phase_labels = {
+                    "PREPARING_REPOSITORY": "Preparing repository checkout",
+                    "CHECKING_OUT_PR": "Checking out pull request",
+                    "CHECKING_REVIEW_LIMITS": "Checking review limits",
+                    "STARTING_REVIEW": "Starting CodeRabbit review",
+                    "RUNNING_CODERABBIT": "CodeRabbit is analyzing this pull request",
+                    "PREPARING_FINDINGS": "Preparing review findings",
+                    "PUBLISHING_REVIEW": "Posting review to GitHub",
+                }
                 item["status_badge"] = "REVIEW_IN_PROGRESS"
-                item["status_label"] = f"Review in Progress (Attempt {attempt}/3)"
+                item["status_label"] = phase_labels.get(phase, "Review in progress")
+                item["review_phase"] = phase
+                item["review_message"] = active.get("message") or item["status_label"]
+                item["status_description"] = item["review_message"]
                 item["attempt"] = attempt
-            elif is_rate_limited and status_entry.get("status") == "RATE_LIMITED":
-                mins = max(1, remaining // 60)
+            elif status_entry.get("status") == "RATE_LIMITED":
+                mins = max(1, remaining // 60) if is_rate_limited else 0
                 item["status_badge"] = "RATE_LIMITED"
-                item["status_label"] = f"Retrying in {mins}m"
+                item["status_label"] = f"Retrying in {mins}m" if is_rate_limited else "Retry queued"
+                item["status_description"] = (
+                    "CodeRabbit temporarily limited requests. The review will be retried after the cooldown."
+                    if is_rate_limited else "The cooldown has ended; the next scan will retry this pull request."
+                )
                 item["attempt"] = status_entry.get("attempt", 1)
             elif status_entry.get("status") == "SKIPPED_MAX_FILES":
                 item["status_badge"] = "SKIPPED_MAX_FILES"
+                item["status_label"] = "Skipped: file limit exceeded"
+                item["status_description"] = f"This PR changes {status_entry.get('file_count', 'too many')} files; the configured review limit is {status_entry.get('limit', config.get('max_files_limit', 100))}."
+            elif status_entry.get("status") == "ERROR":
+                item["status_badge"] = "REVIEW_FAILED"
+                item["status_label"] = "Review failed"
+                item["status_description"] = str(status_entry.get("error") or "The review could not be completed. Check Details & Logs for diagnostics.")
+            elif status_entry.get("status") == "ALREADY_REVIEWED":
+                item["status_badge"] = "ALREADY_REVIEWED"
+                item["status_label"] = "Already reviewed"
+                item["status_description"] = f"This commit already has an automated review ({status_entry.get('review_state') or 'review submitted'}). A new review will run when the PR head changes or you force a review."
             elif has_other_changes:
                 item["status_badge"] = "OTHER_CHANGES_REQUESTED"
                 item["status_label"] = f"Changes Requested by {changers_str}"
+                item["status_description"] = f"{changers_str} requested changes on this pull request."
             elif is_auto_approved:
                 item["status_badge"] = "APPROVED"
                 item["status_label"] = "Auto Approved by You"
+                item["status_description"] = "The automated review completed with no blocking findings and submitted an approval."
             elif is_manual_approved:
                 item["status_badge"] = "MANUALLY_APPROVED"
                 item["status_label"] = "Manually Approved by You"
+                item["status_description"] = "You have approved this pull request manually."
             elif status_entry.get("review_outcome") == "NEEDS_WORK (Minor Issues Detected)":
                 item["status_badge"] = "COMMENTS_POSTED"
                 item["status_label"] = "Needs Work (Minor Issues)"
+                item["status_description"] = "The review found minor issues and posted comments instead of approving."
             elif status_entry.get("status") == "COMPLETED" or status_entry.get("review_state") == "CHANGES_REQUESTED":
                 item["status_badge"] = "COMMENTS_POSTED"
                 item["status_label"] = "Comments Posted"
+                item["status_description"] = "The review completed and posted findings or comments to this pull request."
             elif item["is_own_pr"]:
                 item["status_badge"] = "OWN_PR"
                 item["status_label"] = "Your PR (Author)"
+                item["status_description"] = "This pull request belongs to the authenticated account; automatic approval is disabled for your own PR."
             else:
                 item["status_badge"] = "PENDING_REVIEW"
                 item["status_label"] = "Pending Review"
+                item["status_description"] = "Waiting for the next review scan to check eligibility and start an automated review."
 
             item["report_file"] = status_entry.get("report_file", "")
             annotated_prs.append(item)
@@ -276,7 +320,8 @@ class DashboardBackend:
             "repositories": config.get("repositories", []),
             "pull_requests": annotated_prs,
             "authenticated_user": auth_user,
-            "scan_in_progress": bool(self._scan_in_progress)
+            "scan_in_progress": bool(self._scan_in_progress),
+            "scan_phase": self._scan_phase
         }
 
     def get_pr_details(self, pr_key: str) -> Optional[Dict[str, Any]]:

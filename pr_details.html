@@ -748,9 +748,13 @@
             const pills = [];
 
             if (pr.status_badge === 'REVIEW_IN_PROGRESS') {
-                pills.push(`<span class="badge badge-blue">⚡ Review in Progress (Attempt ${pr.attempt || 1}/3)</span>`);
+                pills.push(`<span class="badge badge-blue">⚡ ${escapeHtml(pr.status_label || 'Review in progress')} (Attempt ${pr.attempt || 1}/3)</span>`);
             } else if (pr.status_badge === 'RATE_LIMITED') {
                 pills.push(`<span class="badge badge-orange">⏳ Rate Limited (${escapeHtml(pr.status_label || 'Retrying')})</span>`);
+            } else if (pr.status_badge === 'REVIEW_FAILED') {
+                pills.push(`<span class="badge badge-red">❌ Review Failed</span>`);
+            } else if (pr.status_badge === 'ALREADY_REVIEWED') {
+                pills.push(`<span class="badge badge-purple">✓ Already Reviewed</span>`);
             } else if (pr.has_user_auto_approved || pr.status_badge === 'APPROVED') {
                 pills.push(`<span class="badge badge-green">🤖 Auto Approved by You</span>`);
             } else if (pr.has_user_manually_approved || pr.status_badge === 'MANUALLY_APPROVED') {
@@ -774,7 +778,10 @@
                 pills.push(`<span class="badge badge-red">⚠️ Merge Conflict</span>`);
             }
 
-            container.innerHTML = pills.join('');
+            const description = pr.status_description
+                ? `<div style="flex-basis: 100%; color: var(--text-muted); font-size: 0.8rem; line-height: 1.45;">${escapeHtml(pr.status_description)}</div>`
+                : '';
+            container.innerHTML = pills.join('') + description;
         }
 
         function renderRunHistory(logs) {
