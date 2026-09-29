@@ -32,7 +32,7 @@ RUN curl -fsSL https://cli.coderabbit.ai/install.sh -o /tmp/install.sh \
 WORKDIR /app
 
 # Copy application files
-COPY config_manager.py state_manager.py github_client.py auto_review_prs.py web_dashboard.py dashboard.html pr_details.html entrypoint.sh .coderabbit.yaml /app/
+COPY config_manager.py state_manager.py github_client.py auto_review_prs.py repository_management.py review_management.py web_dashboard.py dashboard.html pr_details.html entrypoint.sh .coderabbit.yaml /app/
 COPY assets /app/assets/
 
 

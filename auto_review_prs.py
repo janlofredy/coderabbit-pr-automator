@@ -153,11 +153,18 @@ class AutoReviewEngine:
                 logger.info("Using CodeRabbit config: %s", cfg_path)
                 break
 
-        logger.info("Executing CodeRabbit CLI: %s in %s", " ".join(cmd), repo_path)
         env = os.environ.copy()
         api_key = self.config_manager.get_coderabbit_api_key()
         if api_key:
+            # Headless Docker environments cannot complete browser login. Use
+            # CodeRabbit's supported per-review Agentic API key option directly.
+            region = os.getenv("CODERABBIT_REGION", "").strip().lower()
+            if region == "eu":
+                cmd.extend(["--region", "eu"])
+            cmd.extend(["--api-key", api_key])
             env["CODERABBIT_API_KEY"] = api_key
+        logged_cmd = ["[REDACTED]" if api_key and part == api_key else part for part in cmd]
+        logger.info("Executing CodeRabbit CLI: %s in %s", " ".join(logged_cmd), repo_path)
 
         try:
             res = subprocess.run(
@@ -169,7 +176,18 @@ class AutoReviewEngine:
                 env=env,
                 timeout=self.cli_timeout
             )
-            return res.returncode, res.stdout, res.stderr
+            stdout = res.stdout or ""
+            stderr = res.stderr or ""
+            if api_key:
+                stdout = stdout.replace(api_key, "[REDACTED]")
+                stderr = stderr.replace(api_key, "[REDACTED]")
+            combined = f"{stdout}\n{stderr}".lower()
+            if res.returncode != 0 and "environment_unsupported" in combined:
+                stderr = (
+                    f"{stderr}\nHeadless CodeRabbit authentication is required. "
+                    "Create an Agentic API key and save it in Dashboard Settings under CodeRabbit API Key."
+                )
+            return res.returncode, stdout, stderr
         except subprocess.TimeoutExpired as e:
             logger.error("CodeRabbit CLI timed out after %ds", self.cli_timeout)
             return -1, e.stdout or "", f"TimeoutExpired: Review exceeded {self.cli_timeout} seconds"

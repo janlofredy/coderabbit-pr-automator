@@ -282,6 +282,23 @@
             margin-bottom: 2.5rem;
         }
 
+        .repo-pr-group { grid-column: 1 / -1; }
+        .repo-pr-group-header {
+            display: flex;
+            align-items: baseline;
+            gap: 0.6rem;
+            margin: 0 0 0.85rem;
+            color: var(--text-main);
+            font-size: 1rem;
+        }
+        .repo-pr-group-count { color: var(--text-muted); font-size: 0.8rem; font-weight: 500; }
+        .repo-pr-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(min(420px, 100%), 1fr));
+            gap: 1.25rem;
+            margin-bottom: 1.8rem;
+        }
+
         .pr-card {
             background-color: var(--surface-color);
             border: 1px solid var(--border-color);
@@ -491,19 +508,10 @@
     <div id="processing-banner" class="banner-processing hidden">
         <div>
             <span class="spinner" style="border-top-color: #a5b4fc;"></span>
-            <strong>Review Engine Active:</strong>
-            <span id="processing-banner-text" style="margin-left: 0.5rem;">Checking repositories for open pull requests...</span>
+            <strong>Repository Management:</strong>
+            <span id="processing-banner-text" style="margin-left: 0.5rem;">Checking enabled repositories...</span>
         </div>
         <span id="processing-banner-state" class="badge badge-purple" style="font-size: 0.75rem;">CHECKING REPOS</span>
-    </div>
-
-    <div id="rate-limit-banner" class="banner-rate-limit hidden">
-        <div>
-            <strong>⏳ CodeRabbit Rate Limit Cooldown Active:</strong>
-            <span id="rate-limit-timer-text">Retrying in ...</span>
-            <span id="rate-limit-reason-text" style="opacity: 0.85; margin-left: 0.5rem; font-size: 0.85rem;"></span>
-        </div>
-        <button class="btn btn-sm btn-danger" onclick="clearRateLimit()">Bypass / Clear Cooldown</button>
     </div>
 
     <main>
@@ -603,6 +611,7 @@
                 <div>
                     <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem;">CodeRabbit API Key (Optional)</label>
                     <input type="password" id="setting-coderabbit-key" class="form-input" placeholder="Leave blank to keep existing key, or type new key">
+                    <small style="color: var(--text-muted); font-size: 0.75rem; display: block; margin-top: 0.3rem;">Use an Agentic API key for headless Docker reviews. The key is passed to the CodeRabbit CLI for each review.</small>
                     <div id="setting-key-status" style="font-size: 0.75rem; margin-top: 0.35rem; color: var(--text-muted);"></div>
                 </div>
             </div>
@@ -622,8 +631,6 @@
 
     <script>
         let currentStatus = null;
-        let rateLimitExpiresAt = 0;
-        let countdownTimer = null;
         let activeActionCount = 0;
 
         function showToast(message, type = 'info', durationMs = 4000) {
@@ -735,94 +742,36 @@
                 document.getElementById('stat-last-run').textContent = "Scanning...";
             }
 
-            // Processing / Scan Active Banner
+            // Repository Management activity is global. Review progress is shown on each PR card.
             const processingBanner = document.getElementById('processing-banner');
             const processingBannerText = document.getElementById('processing-banner-text');
             const processingBannerState = document.getElementById('processing-banner-state');
-            const activeReviews = (data.pull_requests || []).filter(p => p.status_badge === 'REVIEW_IN_PROGRESS');
-            const isScanning = Boolean(data.scan_in_progress || activeReviews.length);
+            const repositoryStatus = data.repository_status || {};
 
             if (processingBanner) {
-                if (isScanning) {
+                if (repositoryStatus.active) {
                     processingBanner.classList.remove('hidden');
-                    if (activeReviews.length) {
-                        const inProgressPr = activeReviews[0];
-                        const prTitle = inProgressPr.title ? ` “${inProgressPr.title}”` : '';
-                        const phaseText = inProgressPr.status_description || inProgressPr.status_label || 'Review in progress';
-                        const attemptText = `Attempt ${inProgressPr.attempt || 1} of 3`;
-                        const activeCount = activeReviews.length > 1 ? ` ${activeReviews.length} PR reviews are active.` : '';
-                        processingBannerText.textContent = `${inProgressPr.pr_key}${prTitle} — ${phaseText}. ${attemptText}.${activeCount}`;
-                        if (processingBannerState) {
-                            const phaseNames = {
-                                PREPARING_REPOSITORY: 'PREPARING REPO',
-                                CHECKING_OUT_PR: 'CHECKING OUT PR',
-                                CHECKING_REVIEW_LIMITS: 'CHECKING LIMITS',
-                                STARTING_REVIEW: 'STARTING REVIEW',
-                                RUNNING_CODERABBIT: 'RUNNING CODERABBIT',
-                                PREPARING_FINDINGS: 'PREPARING FINDINGS',
-                                PUBLISHING_REVIEW: 'POSTING REVIEW'
-                            };
-                            processingBannerState.textContent = phaseNames[inProgressPr.review_phase] || 'REVIEWING PR';
-                            processingBannerState.className = 'badge badge-blue';
-                        }
-                    } else {
-                        const enabledRepoCount = (data.repositories || []).filter(repo => repo.enabled).length;
-                        const scanMessages = {
-                            CHECKING_REPOSITORIES: 'Checking enabled repositories and connecting to GitHub.',
-                            LOADING_SELECTED_PULL_REQUEST: 'Refreshing the selected pull request details before review.',
-                            REVIEWING_SELECTED_PULL_REQUEST: 'Starting the selected pull request review.',
-                            DISCOVERING_PULL_REQUESTS: 'Finding open pull requests and checking which ones need a review.',
-                            REFRESHING_PR_STATUS: 'Refreshing pull request statuses after the scan.'
-                        };
-                        const scanMessage = scanMessages[data.scan_phase] || `Checking ${enabledRepoCount} enabled ${enabledRepoCount === 1 ? 'repository' : 'repositories'} for open pull requests.`;
-                        processingBannerText.textContent = `${scanMessage} ${enabledRepoCount} enabled ${enabledRepoCount === 1 ? 'repository' : 'repositories'} configured.`;
-                        if (processingBannerState) {
-                            const scanLabels = {
-                                CHECKING_REPOSITORIES: 'CHECKING REPOS',
-                                LOADING_SELECTED_PULL_REQUEST: 'LOADING PR',
-                                REVIEWING_SELECTED_PULL_REQUEST: 'STARTING PR REVIEW',
-                                DISCOVERING_PULL_REQUESTS: 'FINDING PRS',
-                                REFRESHING_PR_STATUS: 'UPDATING STATUS'
-                            };
-                            processingBannerState.textContent = scanLabels[data.scan_phase] || 'CHECKING REPOS';
-                            processingBannerState.className = 'badge badge-purple';
-                        }
+                    const repositoryPhases = {
+                        VALIDATING_REPOSITORY: 'VALIDATING REPO',
+                        ADDING_REPOSITORY: 'ADDING REPO',
+                        UPDATING_REPOSITORY: 'UPDATING REPO',
+                        REMOVING_REPOSITORY: 'REMOVING REPO',
+                        CHECKING_REPOSITORIES: 'CHECKING REPOS',
+                        FETCHING_PULL_REQUESTS: 'FETCHING PRS',
+                        UPDATING_PR_CACHE: 'UPDATING CACHE'
+                    };
+                    processingBannerText.textContent = repositoryStatus.message || 'Checking configured repositories.';
+                    if (processingBannerState) {
+                        processingBannerState.textContent = repositoryPhases[repositoryStatus.phase] || 'REPOSITORY CHECK';
+                        processingBannerState.className = 'badge badge-purple';
                     }
                 } else {
                     processingBanner.classList.add('hidden');
                 }
             }
 
-            // Rate Limit Banner
-            rateLimitExpiresAt = data.rate_limit_expires_at || 0;
-            const banner = document.getElementById('rate-limit-banner');
-            if (data.rate_limited && rateLimitExpiresAt > (Date.now() / 1000)) {
-                banner.classList.remove('hidden');
-                document.getElementById('rate-limit-reason-text').textContent = `(${data.rate_limit_reason || 'Quota exceeded'})`;
-                updateCountdown();
-            } else {
-                banner.classList.add('hidden');
-            }
-
             // PR Grid
             renderPRs(data.pull_requests || []);
-        }
-
-        function updateCountdown() {
-            if (!rateLimitExpiresAt) return;
-            const now = Math.floor(Date.now() / 1000);
-            const remaining = Math.max(0, rateLimitExpiresAt - now);
-
-            if (remaining <= 0) {
-                document.getElementById('rate-limit-timer-text').textContent = "Expiring now...";
-                return;
-            }
-
-            const mins = Math.floor(remaining / 60);
-            const secs = remaining % 60;
-            const resumeDate = new Date(rateLimitExpiresAt * 1000).toLocaleTimeString();
-            document.getElementById('rate-limit-timer-text').textContent = 
-                `Will retry in ${mins}m ${secs}s (at ${resumeDate})`;
         }
 
         function getBadgeInfo(pr) {
@@ -862,7 +811,18 @@
                 return;
             }
 
-            container.innerHTML = prs.map(pr => {
+            const groupedPRs = new Map();
+            prs.forEach(pr => {
+                const repo = pr.repo || 'Other repositories';
+                if (!groupedPRs.has(repo)) groupedPRs.set(repo, []);
+                groupedPRs.get(repo).push(pr);
+            });
+
+            container.innerHTML = Array.from(groupedPRs.entries()).map(([repo, repoPRs]) => `
+                <section class="repo-pr-group">
+                    <h3 class="repo-pr-group-header">📁 ${escapeHtml(repo)} <span class="repo-pr-group-count">${repoPRs.length} ${repoPRs.length === 1 ? 'pull request' : 'pull requests'}</span></h3>
+                    <div class="repo-pr-grid">
+                        ${repoPRs.map(pr => {
                 const hasReport = !!pr.report_file;
                 const otherApproved = (pr.other_approved_by || []).length > 0 ? `<span>👍 Approved by: <strong>${escapeHtml(pr.other_approved_by.join(', '))}</strong></span>` : '';
 
@@ -947,6 +907,7 @@
                             ${pills.join('')}
                         </div>
                         ${pr.status_description ? `<div class="pr-status-description">${escapeHtml(pr.status_description)}</div>` : ''}
+                        ${pr.status_badge === 'RATE_LIMITED' ? `<button class="btn btn-sm btn-danger" style="margin: -0.5rem 0 1rem;" onclick="clearRateLimit(this)">Clear shared cooldown</button>` : ''}
                     </div>
                     <div class="pr-actions">
                         <a href="/pr-details?pr_key=${encodeURIComponent(pr.pr_key)}" class="btn btn-sm btn-primary" title="View complete execution logs and review diagnostics">📋 Details & Logs</a>
@@ -957,7 +918,10 @@
                     </div>
                 </div>
                 `;
-            }).join('');
+            }).join('')}
+                    </div>
+                </section>
+            `).join('');
         }
 
         function escapeHtml(text) {
@@ -979,7 +943,7 @@
                 });
                 const data = await res.json();
                 if (res.ok) {
-                    showToast('Scan started! The engine is actively reviewing PRs in the background.', 'success');
+                    showToast('Repository check started. Review progress will appear on each pull request.', 'success');
                 } else {
                     showToast(`Scan request failed: ${data.error || 'Server error'}`, 'error');
                 }
@@ -1020,8 +984,7 @@
             }
         }
 
-        async function clearRateLimit() {
-            const btn = document.querySelector('#rate-limit-banner button');
+        async function clearRateLimit(btn) {
             if (btn) setButtonLoading(btn, true, '<span class="spinner"></span>Clearing...');
             showToast('Clearing rate limit cooldown...', 'info');
 
@@ -1296,7 +1259,6 @@
         }
 
         // Tickers & Init
-        setInterval(updateCountdown, 1000);
         setInterval(fetchStatus, 5000);
         fetchStatus();
     </script>

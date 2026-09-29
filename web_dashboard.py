@@ -14,6 +14,8 @@ from config_manager import ConfigManager, safe_int_env
 from state_manager import StateManager
 from github_client import GitHubClient
 from auto_review_prs import AutoReviewEngine, DEFAULT_REVIEWS_DIR
+from repository_management import RepositoryManagementService
+from review_management import ReviewManagementService
 
 logger = logging.getLogger("dashboard")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -45,12 +47,21 @@ class DashboardBackend:
             github_client=self.github_client
         )
 
-        self._cached_prs: List[Dict[str, Any]] = []
-        self._cache_lock = threading.Lock()
+        # Keep one shared executor for concurrent repository fetches and the
+        # single-flight review task; the services own their respective logic.
         self._executor = ThreadPoolExecutor(max_workers=5)
+        self.repository_service = RepositoryManagementService(
+            self.config_manager, self.github_client, executor=self._executor
+        )
+        self.review_service = ReviewManagementService(
+            self.config_manager,
+            self.state_manager,
+            self.github_client,
+            self.repository_service,
+            self.review_engine,
+            executor=self._executor,
+        )
         self._is_running = True
-        self._scan_in_progress = False
-        self._scan_phase = "IDLE"
 
         # Start continuous background worker
         self._worker_thread = None
@@ -59,76 +70,12 @@ class DashboardBackend:
             self._worker_thread.start()
 
     def fetch_repo_prs(self, repo_info: Dict[str, Any]) -> List[Dict[str, Any]]:
-        full_name = repo_info.get("full_name", "")
-        if not full_name:
-            return []
-
-        owner, repo_name = GitHubClient.split_repo(full_name)
-        try:
-            prs = self.github_client.list_open_prs(owner, repo_name)
-            auth_user = self.github_client.get_username()
-            results = []
-
-            for pr in prs:
-                num = pr.get("number")
-                pr_key = f"{full_name}#{num}"
-                author = (pr.get("user") or {}).get("login", "")
-                is_own = bool(auth_user and author.lower() == auth_user.lower())
-                head_sha = (pr.get("head") or {}).get("sha", "")
-
-                # Fetch PR review summary (other reviewers' requested changes, user's review)
-                review_summary = self.github_client.get_pr_review_summary(
-                    owner, repo_name, num, commit_sha=head_sha, auth_user=auth_user
-                )
-
-                results.append({
-                    "pr_key": pr_key,
-                    "repo": full_name,
-                    "number": num,
-                    "title": pr.get("title", ""),
-                    "author": author,
-                    "is_own_pr": is_own,
-                    "base_ref": (pr.get("base") or {}).get("ref", ""),
-                    "head_ref": (pr.get("head") or {}).get("ref", ""),
-                    "head_sha": head_sha,
-                    "html_url": pr.get("html_url", ""),
-                    "created_at": pr.get("created_at", ""),
-                    "updated_at": pr.get("updated_at", ""),
-                    "has_other_changes_requested": review_summary.get("has_other_changes_requested", False),
-                    "other_changes_requested_by": review_summary.get("other_changes_requested_by", []),
-                    "other_approved_by": review_summary.get("other_approved_by", []),
-                    "other_commented_by": review_summary.get("other_commented_by", []),
-                    "has_other_commented": review_summary.get("has_other_commented", False),
-                    "has_user_auto_approved": review_summary.get("has_user_auto_approved", False),
-                    "has_user_manually_approved": review_summary.get("has_user_manually_approved", False),
-                    "has_check_error": review_summary.get("has_check_error", False),
-                    "failed_checks": review_summary.get("failed_checks", []),
-                    "has_conflict": review_summary.get("has_conflict", False),
-                    "mergeable_state": review_summary.get("mergeable_state", "unknown"),
-                    "has_user_reviewed": review_summary.get("has_user_reviewed", False),
-                    "user_review_state": review_summary.get("user_review_state")
-                })
-            return results
-        except Exception as e:
-            logger.warning("Error fetching PRs for %s: %s", full_name, e)
-            return []
+        """Compatibility facade; repository discovery lives in its service."""
+        return self.repository_service.fetch_repo_prs(repo_info)
 
     def refresh_pr_cache(self) -> None:
-        """Fetches PRs across all enabled repositories concurrently and caches them."""
-        enabled_repos = self.config_manager.get_enabled_repos()
-        futures = [self._executor.submit(self.fetch_repo_prs, r) for r in enabled_repos]
-        collected = []
-        for f in futures:
-            try:
-                collected.extend(f.result())
-            except Exception as e:
-                logger.error("Exception during repo PR fetch: %s", e)
-
-        # Sort by updated_at desc
-        collected.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
-        with self._cache_lock:
-            self._cached_prs = collected
-        logger.info("PR cache refreshed: %d open PR(s) found.", len(collected))
+        """Compatibility facade; repository cache management lives in its service."""
+        self.repository_service.refresh_pr_cache()
 
     def _background_loop(self) -> None:
         """Background daemon polling repositories and auto-reviewing."""
@@ -150,42 +97,8 @@ class DashboardBackend:
                 time.sleep(5)
 
     def run_review_scan(self, force: bool = False, pr_key: Optional[str] = None) -> None:
-        """Runs a review pass over all PRs or a specific PR."""
-        if self._scan_in_progress:
-            logger.info("Scan already in progress. Skipping.")
-            return
-
-        def task():
-            self._scan_in_progress = True
-            self._scan_phase = "CHECKING_REPOSITORIES"
-            try:
-                self.refresh_pr_cache()
-                if pr_key:
-                    self._scan_phase = "LOADING_SELECTED_PULL_REQUEST"
-                    with self._cache_lock:
-                        target = next((p for p in self._cached_prs if p["pr_key"] == pr_key), None)
-                    if target:
-                        repo_info = next((r for r in self.config_manager.get_repos() if r["full_name"] == target["repo"]), None)
-                        if repo_info:
-                            self._scan_phase = "REVIEWING_SELECTED_PULL_REQUEST"
-                            # Fetch full PR object
-                            owner, repo_name = GitHubClient.split_repo(target["repo"])
-                            full_pr = self.github_client.get_pr(owner, repo_name, target["number"])
-                            self.review_engine.review_single_pr(repo_info, full_pr, force=force)
-                else:
-                    self._scan_phase = "DISCOVERING_PULL_REQUESTS"
-                    self.review_engine.scan_and_review_all(force=force)
-            except Exception as e:
-                logger.error("Error in review scan task: %s", e)
-            finally:
-                self._scan_phase = "REFRESHING_PR_STATUS"
-                try:
-                    self.refresh_pr_cache()
-                finally:
-                    self._scan_phase = "IDLE"
-                    self._scan_in_progress = False
-
-        self._executor.submit(task)
+        """Compatibility facade; review scheduling lives in its service."""
+        self.review_service.run_review_scan(force=force, pr_key=pr_key)
 
     def get_annotated_status(self) -> Dict[str, Any]:
         """Overlays real-time state manager data onto cached PR records for sub-millisecond response."""
@@ -198,8 +111,7 @@ class DashboardBackend:
         auth_user = self.github_client.get_username()
 
         annotated_prs = []
-        with self._cache_lock:
-            cached_list = list(self._cached_prs)
+        cached_list = self.repository_service.get_cached_prs()
 
         for pr in cached_list:
             item = dict(pr)
@@ -238,10 +150,11 @@ class DashboardBackend:
                 item["status_badge"] = "RATE_LIMITED"
                 item["status_label"] = f"Retrying in {mins}m" if is_rate_limited else "Retry queued"
                 item["status_description"] = (
-                    "CodeRabbit temporarily limited requests. The review will be retried after the cooldown."
+                    f"Shared CodeRabbit cooldown ({reason or 'request limit reached'}); retry in about {mins} minute(s). Use Force to retry early."
                     if is_rate_limited else "The cooldown has ended; the next scan will retry this pull request."
                 )
                 item["attempt"] = status_entry.get("attempt", 1)
+                item["rate_limit_remaining_seconds"] = remaining
             elif status_entry.get("status") == "SKIPPED_MAX_FILES":
                 item["status_badge"] = "SKIPPED_MAX_FILES"
                 item["status_label"] = "Skipped: file limit exceeded"
@@ -320,8 +233,9 @@ class DashboardBackend:
             "repositories": config.get("repositories", []),
             "pull_requests": annotated_prs,
             "authenticated_user": auth_user,
-            "scan_in_progress": bool(self._scan_in_progress),
-            "scan_phase": self._scan_phase
+            "scan_in_progress": self.review_service.scan_in_progress,
+            "scan_phase": self.review_service.scan_phase,
+            "repository_status": self.repository_service.get_status()
         }
 
     def get_pr_details(self, pr_key: str) -> Optional[Dict[str, Any]]:
@@ -475,7 +389,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
 
 
         if path == "/api/repos":
-            repos = backend.config_manager.get_repos()
+            repos = backend.repository_service.get_repositories()
             self._set_headers(200)
             self.wfile.write(json.dumps(repos).encode("utf-8"))
             return
@@ -516,7 +430,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/clear-rate-limit":
-            backend.state_manager.clear_rate_limit()
+            backend.review_service.clear_rate_limit()
             self._set_headers(200)
             self.wfile.write(json.dumps({"status": "cleared"}).encode("utf-8"))
             return
@@ -554,7 +468,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 self._set_headers(400)
                 self.wfile.write(json.dumps({"error": "Missing full_name"}).encode("utf-8"))
                 return
-            updated = backend.config_manager.toggle_repo(full_name, data.get("enabled"))
+            updated = backend.repository_service.toggle_repository(full_name, data.get("enabled"))
             self._set_headers(200)
             self.wfile.write(json.dumps(updated or {}).encode("utf-8"))
             return
@@ -567,12 +481,12 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 return
 
             # Instant GitHub API validation
-            if not backend.github_client.validate_repo(full_name):
+            if not backend.repository_service.validate_repository(full_name):
                 self._set_headers(400)
                 self.wfile.write(json.dumps({"error": f"Repository '{full_name}' not found or inaccessible with current GITHUB_TOKEN"}).encode("utf-8"))
                 return
 
-            repo_entry = backend.config_manager.add_repo(full_name)
+            repo_entry = backend.repository_service.add_repository(full_name)
             # Trigger immediate PR cache refresh
             backend.refresh_pr_cache()
             self._set_headers(200)
@@ -581,7 +495,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
 
         if path == "/api/repos/remove":
             full_name = data.get("full_name", "").strip()
-            removed = backend.config_manager.remove_repo(full_name)
+            removed = backend.repository_service.remove_repository(full_name)
             backend.refresh_pr_cache()
             self._set_headers(200)
             self.wfile.write(json.dumps({"removed": removed}).encode("utf-8"))

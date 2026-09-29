@@ -12,6 +12,7 @@ services:
       - "${PORT:-8765}:8765"
     environment:
       - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - CODERABBIT_REGION=${CODERABBIT_REGION:-us}
     volumes:
       - ./data/config:/root/.coderabbit
       - ./data/reviews:/root/.coderabbit/reviews

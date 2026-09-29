@@ -13,7 +13,7 @@ A headless, continuous CI/CD background automation service and real-time Web Das
 ## ✨ Features
 
 - **Continuous Background Monitoring**: Periodically scans configured GitHub repositories for unreviewed pull requests.
-- **Headless CodeRabbit CLI Execution**: Leverages the official CodeRabbit CLI in agent mode (`--agent --base <ref>`) with 240-second timeout detection.
+- **Headless CodeRabbit CLI Execution**: Leverages the official CodeRabbit CLI in agent mode (`--agent --base <ref>`) with a configurable 45-minute default timeout (`CODERABBIT_TIMEOUT`).
 - **Intelligent Diff & Per-File Line Comments**:
   - Automatically fetches the target base branch and PR head commit.
   - Matches CodeRabbit findings to line numbers in `git diff -U0`.
@@ -41,6 +41,17 @@ A headless, continuous CI/CD background automation service and real-time Web Das
 - **Dynamic Repository Management**:
   - Real-time repository toggling (Active vs Paused) without container restarts.
   - Add new repositories with instant GitHub API validation.
+
+## 🧩 Service Boundaries
+
+The dashboard composes two management services:
+
+1. **Repository Management** (`repository_management.py`) owns repository configuration operations, GitHub repository validation, open-PR discovery, and the PR cache.
+2. **Review Management** (`review_management.py`) owns review scheduling, scan phases, single-PR review triggers, cooldown controls, and coordination with the review engine.
+
+`web_dashboard.py` connects these services to the HTTP API and builds the dashboard status response. Repository discovery and review execution remain separate responsibilities; review runs are still processed one PR at a time.
+
+Repository discovery appears in the global activity notification. Review phases and outcomes appear on their respective PR cards, which are grouped by repository while retaining their current order within each repository.
 
 ---
 
@@ -95,9 +106,9 @@ Requires a **GitHub Personal Access Token** (Classic or Fine-Grained) with:
 - Set via `GITHUB_TOKEN` environment variable.
 
 ### 2. CodeRabbit Authentication
-The system supports two headless authentication methods:
-- **Web Dashboard / config.json**: Enter your `CODERABBIT_API_KEY` directly inside the **⚙️ Settings** modal in the Web Dashboard. It saves into `/root/.coderabbit/config.json` and takes effect immediately.
-- **Mounted Auth File**: If you have already authenticated CodeRabbit locally on your host machine, mount your `~/.coderabbit/auth.json` into the container volume (`/root/.coderabbit/auth.json`).
+Use a CodeRabbit **Agentic API key** for headless Docker reviews. Enter it in **⚙️ Settings** in the dashboard; it is passed to each CLI review and takes effect immediately. You can also provide the key through the `CODERABBIT_API_KEY` environment variable.
+
+Browser-based CLI login is unavailable inside a headless container. See the [CodeRabbit headless CLI guide](https://docs.coderabbit.ai/cli/headless-cli-integration) for Agentic API key requirements and EU-region setup.
 
 ---
 
@@ -106,6 +117,8 @@ The system supports two headless authentication methods:
 | Variable | Description | Default |
 | :--- | :--- | :--- |
 | `GITHUB_TOKEN` | GitHub Personal Access Token (`repo` scope) | *Required* |
+| `CODERABBIT_API_KEY` | CodeRabbit Agentic API key for headless reviews | Optional; can be set in dashboard settings |
+| `CODERABBIT_REGION` | CodeRabbit account region (`us` or `eu`) | `us` |
 
 > 💡 **Note**: All other operational configuration (monitored repositories, polling intervals, max file limits, auto-approvals, strict approval mode, and CodeRabbit API keys) is persisted in `config.json` on the mounted storage volume and can be changed live from the Web Dashboard without recreating or restarting the container.
 
