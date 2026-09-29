@@ -52,6 +52,94 @@ class GitHubClient:
             logger.error("Network error accessing GitHub API on %s %s: %s", method, url, e)
             raise GitHubAPIException(0, str(e.reason), {}) from e
 
+    def resolve_previous_review_threads(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        username: str,
+        keep_review_id: Optional[int] = None,
+    ) -> int:
+        """Resolve older unresolved review threads authored by this account.
+
+        GitHub only exposes review-thread resolution through GraphQL. Failures are
+        intentionally best-effort so comment cleanup cannot invalidate a review.
+        """
+        if not username:
+            return 0
+
+        try:
+            pr = self.get_pr(owner, repo, pr_number)
+            pr_node_id = pr.get("node_id")
+            if not pr_node_id:
+                logger.warning("Cannot resolve old review threads: PR node ID missing")
+                return 0
+
+            query = """query($id: ID!, $cursor: String) {
+              node(id: $id) {
+                ... on PullRequest {
+                  reviewThreads(first: 100, after: $cursor) {
+                    nodes {
+                      id
+                      isResolved
+                      comments(first: 100) {
+                        nodes {
+                          author { login }
+                          pullRequestReview { databaseId }
+                        }
+                      }
+                    }
+                    pageInfo { hasNextPage endCursor }
+                  }
+                }
+              }
+            }"""
+            mutation = """mutation($threadId: ID!) {
+              resolveReviewThread(input: {threadId: $threadId}) {
+                thread { id isResolved }
+              }
+            }"""
+
+            cursor = None
+            resolved = 0
+            while True:
+                result = self._request("POST", f"{GITHUB_API_BASE}/graphql", {
+                    "query": query,
+                    "variables": {"id": pr_node_id, "cursor": cursor},
+                })
+                if result.get("errors"):
+                    raise RuntimeError(result["errors"])
+                threads = result["data"]["node"]["reviewThreads"]
+                for thread in threads.get("nodes", []):
+                    if thread.get("isResolved"):
+                        continue
+                    comments = thread.get("comments", {}).get("nodes", [])
+                    authored_by_user = any(
+                        (comment.get("author") or {}).get("login", "").lower() == username.lower()
+                        for comment in comments
+                    )
+                    includes_new_review = keep_review_id is not None and any(
+                        (comment.get("pullRequestReview") or {}).get("databaseId") == keep_review_id
+                        for comment in comments
+                    )
+                    if authored_by_user and not includes_new_review:
+                        resolved_result = self._request("POST", f"{GITHUB_API_BASE}/graphql", {
+                            "query": mutation,
+                            "variables": {"threadId": thread["id"]},
+                        })
+                        if resolved_result.get("errors"):
+                            logger.warning("Could not resolve review thread %s: %s", thread["id"], resolved_result["errors"])
+                        else:
+                            resolved += 1
+                page_info = threads.get("pageInfo", {})
+                if not page_info.get("hasNextPage"):
+                    break
+                cursor = page_info.get("endCursor")
+            return resolved
+        except Exception as e:
+            logger.warning("Could not resolve previous review threads on %s/%s PR #%s: %s", owner, repo, pr_number, e)
+            return 0
+
     def get_authenticated_user(self) -> Dict[str, Any]:
         """Gets profile for the authenticated GitHub user."""
         if not self._current_user:
