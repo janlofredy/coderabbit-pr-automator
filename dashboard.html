@@ -510,7 +510,7 @@
         <div class="header-actions">
             <span id="service-status-pill" class="badge badge-green">RUNNING</span>
             <span id="strict-mode-pill" class="badge badge-purple" title="Strict Mode: PRs with any minor issue are not approved">STRICT: ON</span>
-            <button id="btn-coderabbit-login" class="btn btn-sm" onclick="openCodeRabbitLogin()">🐰 Login with Google</button>
+            <button id="coderabbit-auth-pill" class="badge badge-gray" type="button" onclick="openCodeRabbitAuthInstructions()" title="Click for CodeRabbit CLI authentication instructions" style="cursor:pointer;font:inherit;">🐰 CodeRabbit Auth: Checking…</button>
             <button id="btn-settings" class="btn btn-sm" onclick="openSettingsModal()">⚙️ Settings</button>
             <button id="btn-repos" class="btn btn-sm" onclick="openRepoModal()">📁 Repositories</button>
             <button id="btn-toggle-service" class="btn btn-sm" onclick="toggleService()">Pause Service</button>
@@ -588,25 +588,26 @@
         </div>
     </div>
 
-    <!-- CodeRabbit CLI Authentication Modal -->
+    <!-- CodeRabbit CLI Authentication Instructions -->
     <div id="coderabbit-auth-modal" class="modal-overlay">
         <div class="modal" style="max-width: 520px;">
             <div class="modal-header">
-                <h3>🐰 CodeRabbit Login</h3>
-                <button class="btn btn-sm" onclick="closeCodeRabbitLogin()">✕</button>
+                <h3>🐰 CodeRabbit Auth Status</h3>
+                <button class="btn btn-sm" onclick="closeCodeRabbitAuthInstructions()">✕</button>
             </div>
-            <p style="color: var(--text-muted);">The CLI will start browser sign-in when the environment supports it. Docker and CI block browser OAuth; if that happens, use the host login steps shown here.</p>
-            <div id="coderabbit-auth-message" style="margin: 1rem 0;">Preparing sign-in…</div>
-            <a id="coderabbit-auth-link" class="btn btn-primary" href="#" target="_blank" rel="noopener noreferrer" style="display:none; text-decoration:none;">Open CodeRabbit sign-in</a>
-            <div id="coderabbit-auth-help" style="display:none; margin-top:1rem;">
-                <p>Docker/CI blocks CodeRabbit browser OAuth. Run this on the Docker host, then reload the dashboard. The default Compose setup mounts this same <code>~/.coderabbit</code> directory into the container.</p>
-                <pre style="white-space:pre-wrap; padding:0.85rem; background:#111827; border-radius:6px;">coderabbit auth login
-# Choose Continue with Google in the browser
-coderabbit auth status</pre>
-                <p>For CasaOS, authenticate on a machine with the CLI, then copy its login state to <code>/DATA/AppData/coderabbit/coderabbit-cli</code>. For headless environments, use an Agentic API key: <a href="https://docs.coderabbit.ai/cli/reference" target="_blank" rel="noopener noreferrer">CLI authentication reference</a>.</p>
-            </div>
+            <div id="coderabbit-auth-message" style="margin: 1rem 0;">Checking CLI status…</div>
+            <p style="color: var(--text-muted);">Google browser sign-in must run on the Docker host because CodeRabbit CLI browser OAuth is unavailable inside Docker/CI.</p>
+            <ol style="padding-left:1.4rem; line-height:1.7;">
+                <li>Open a terminal on the machine running Docker.</li>
+                <li>Install the CodeRabbit CLI there if needed.</li>
+                <li>Run <code>coderabbit auth login</code> and choose <strong>Continue with Google</strong> in the browser.</li>
+                <li>Verify with <code>coderabbit auth status</code>. The default Compose setup mounts that host's <code>~/.coderabbit</code> automatically.</li>
+            </ol>
+            <p>For CasaOS, authenticate on another machine, then copy the CLI state into <code>/DATA/AppData/coderabbit/coderabbit-cli</code>.</p>
+            <p>For headless API-key authentication, run <code>docker exec -it coderabbit-pr-automator coderabbit auth login --api-key "&lt;key&gt;"</code>. <a href="https://docs.coderabbit.ai/cli/reference" target="_blank" rel="noopener noreferrer">CLI auth reference</a></p>
             <div style="display:flex; justify-content:flex-end; margin-top:1.25rem;">
-                <button class="btn btn-secondary" onclick="closeCodeRabbitLogin()">Close</button>
+                <button class="btn btn-sm" onclick="refreshCodeRabbitAuthStatus()">Refresh status</button>
+                <button class="btn btn-secondary" onclick="closeCodeRabbitAuthInstructions()">Close</button>
             </div>
         </div>
     </div>
@@ -1224,52 +1225,40 @@ coderabbit auth status</pre>
         }
 
         /* Settings Modal */
-    let coderabbitAuthPoll = null;
-    async function openCodeRabbitLogin() {
-        document.getElementById('coderabbit-auth-modal').classList.add('active');
-        const message = document.getElementById('coderabbit-auth-message');
-        const link = document.getElementById('coderabbit-auth-link');
-        document.getElementById('coderabbit-auth-help').style.display = 'none';
-        message.textContent = 'Preparing sign-in…';
-        link.style.display = 'none';
-        try {
-            const response = await fetch('/api/coderabbit-auth/login', { method: 'POST' });
-            const state = await response.json();
-            if (!response.ok) throw new Error(state.message || 'Could not start CodeRabbit login.');
-            showCodeRabbitAuthState(state);
-            if (coderabbitAuthPoll) clearInterval(coderabbitAuthPoll);
-            coderabbitAuthPoll = setInterval(pollCodeRabbitAuth, 1500);
-        } catch (error) {
-            message.textContent = error.message;
-        }
-    }
-    function showCodeRabbitAuthState(state) {
-        const message = document.getElementById('coderabbit-auth-message');
-        const link = document.getElementById('coderabbit-auth-link');
-        const help = document.getElementById('coderabbit-auth-help');
-        message.textContent = state.status === 'authenticated' ? 'Signed in successfully. The review service will use this CLI login.' : (state.message || 'Waiting for CodeRabbit sign-in…');
-        help.style.display = state.status === 'environment_unsupported' ? 'block' : 'none';
-        if (state.url) {
-            try {
-                const parsed = new URL(state.url);
-                if (parsed.protocol === 'https:') {
-                    link.href = parsed.href;
-                    link.style.display = 'inline-block';
-                }
-            } catch (_) { /* Ignore malformed CLI output. */ }
-        }
-        if (state.status === 'authenticated' || state.status === 'error' || state.status === 'environment_unsupported') {
-            if (coderabbitAuthPoll) clearInterval(coderabbitAuthPoll);
-            coderabbitAuthPoll = null;
-        }
-    }
-    async function pollCodeRabbitAuth() {
+    async function refreshCodeRabbitAuthStatus() {
         try {
             const response = await fetch('/api/coderabbit-auth');
-            showCodeRabbitAuthState(await response.json());
-        } catch (_) { /* A later poll can recover from temporary connection errors. */ }
+            const state = await response.json();
+            const pill = document.getElementById('coderabbit-auth-pill');
+            if (state.status === 'authenticated') {
+                pill.className = 'badge badge-green';
+                pill.textContent = '🐰 CodeRabbit Auth: Connected';
+            } else if (state.status === 'needs_auth') {
+                pill.className = 'badge badge-yellow';
+                pill.textContent = '🐰 CodeRabbit Auth: Login required';
+            } else {
+                pill.className = 'badge badge-gray';
+                pill.textContent = '🐰 CodeRabbit Auth: Unavailable';
+            }
+            const message = document.getElementById('coderabbit-auth-message');
+            if (message) {
+                message.textContent = state.status === 'authenticated'
+                    ? 'Connected. The CodeRabbit CLI reports an active login.'
+                    : state.status === 'needs_auth'
+                        ? 'No active CodeRabbit CLI login was found.'
+                        : 'Could not read CodeRabbit CLI auth status.';
+            }
+        } catch (_) {
+            const pill = document.getElementById('coderabbit-auth-pill');
+            pill.className = 'badge badge-gray';
+            pill.textContent = '🐰 CodeRabbit Auth: Unavailable';
+        }
     }
-    function closeCodeRabbitLogin() {
+    function openCodeRabbitAuthInstructions() {
+        document.getElementById('coderabbit-auth-modal').classList.add('active');
+        refreshCodeRabbitAuthStatus();
+    }
+    function closeCodeRabbitAuthInstructions() {
         document.getElementById('coderabbit-auth-modal').classList.remove('active');
     }
 
@@ -1364,6 +1353,8 @@ coderabbit auth status</pre>
 
         // Tickers & Init
         setInterval(fetchStatus, 5000);
+        setInterval(refreshCodeRabbitAuthStatus, 30000);
+        refreshCodeRabbitAuthStatus();
         fetchStatus();
     </script>
 </body>

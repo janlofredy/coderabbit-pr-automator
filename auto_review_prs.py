@@ -634,6 +634,9 @@ class AutoReviewEngine:
         # Check line offsets against diff
         valid_lines_by_file = self.get_valid_diff_lines(repo_path, base_ref, pr_number)
         line_comments = []
+        findings_without_file = 0
+        findings_without_changed_lines = 0
+        line_less_findings = 0
         critical_major_count = 0
         minor_count = 0
 
@@ -641,29 +644,60 @@ class AutoReviewEngine:
             if not isinstance(f, dict):
                 continue
 
-            file_path = f.get("file", f.get("path", ""))
-            line_no = f.get("line")
+            file_path = f.get("file") or f.get("path") or f.get("fileName") or ""
+            file_path = str(file_path).removeprefix("./") if file_path else ""
+            line_no = next((f[key] for key in ("line", "lineNumber", "line_number", "startLine")
+                            if f.get(key) is not None), None)
+            has_reported_line = line_no is not None
             severity = str(f.get("severity", "INFO")).upper()
-            msg = f.get("message", f.get("description", str(f)))
+            msg = (f.get("comment") or f.get("codegenInstructions") or f.get("message")
+                   or f.get("description") or str(f))
 
             if severity in ("CRITICAL", "MAJOR", "ERROR"):
                 critical_major_count += 1
             elif severity not in ("INFO", "HINT", "NOTE", "TIP"):
                 minor_count += 1
 
-            if file_path and line_no is not None:
+            if not file_path:
+                findings_without_file += 1
+                continue
+
+            changed_lines = valid_lines_by_file.get(file_path, set())
+            if not changed_lines:
+                findings_without_changed_lines += 1
+                continue
+
+            if line_no is None:
+                # CodeRabbit's documented agent finding schema identifies the file
+                # but does not include a line. Anchor these findings to a changed
+                # line so GitHub can render them inline, and label the anchor.
+                line_no = min(changed_lines)
+                line_less_findings += 1
+
+            if line_no is not None:
                 try:
                     line_int = int(line_no)
-                    # Check if line exists in valid diff lines
-                    if file_path in valid_lines_by_file and line_int in valid_lines_by_file[file_path]:
+                    if line_int in changed_lines:
+                        comment_body = f"🐰 **CodeRabbit [{severity}]**: {msg}"
+                        if not has_reported_line:
+                            comment_body = (
+                                "📄 File-level finding; anchored to the first changed line because "
+                                "the CLI did not provide a line number.\n\n" + comment_body
+                            )
                         line_comments.append({
                             "path": file_path,
                             "line": line_int,
                             "side": "RIGHT",
-                            "body": f"🐰 **CodeRabbit [{severity}]**: {msg}"
+                            "body": comment_body
                         })
                 except (ValueError, TypeError):
                     pass
+
+        logger.info(
+            "Mapped %d of %d CodeRabbit findings to inline comments on %s (line-less=%d, missing-file=%d, no-changed-lines=%d)",
+            len(line_comments), len(findings_list), pr_key, line_less_findings,
+            findings_without_file, findings_without_changed_lines,
+        )
 
         # Determine Review Event only after the CLI reports a valid completion.
         if critical_major_count > 0:

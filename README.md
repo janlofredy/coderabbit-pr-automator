@@ -110,7 +110,7 @@ The CodeRabbit CLI disables browser OAuth inside Docker/CI. Run `coderabbit auth
 
 The CasaOS compose file uses one storage mount, `/DATA/AppData/coderabbit:/app/data`. Inside it, app settings are stored under `config`, review reports under `reviews`, repository checkouts under `repos`, and CodeRabbit CLI credentials under `coderabbit-cli`. Authenticate with `coderabbit auth login` on a machine with a browser, then securely copy that machine's `.coderabbit` directory contents to `/DATA/AppData/coderabbit/coderabbit-cli/`. Keep the CLI state private; it contains login credentials.
 
-The dashboard detects the CLI's unsupported-environment response and shows these host-login steps. For headless or bot-driven authentication, use an Agentic API key with `coderabbit auth login --api-key "<key>"`; see the [CLI auth reference](https://docs.coderabbit.ai/cli/reference).
+The dashboard header shows the current CodeRabbit CLI auth status. Click the status bar for these instructions. For headless or bot-driven authentication, use an Agentic API key with `coderabbit auth login --api-key "<key>"`; see the [CLI auth reference](https://docs.coderabbit.ai/cli/reference).
 
 ---
 
@@ -130,8 +130,7 @@ The dashboard detects the CLI's unsupported-environment response and shows these
 | Endpoint | Method | Description |
 | :--- | :--- | :--- |
 | `/api/status` | `GET` | Returns aggregated status, active rate limits, strict approval mode, PR list, and active/waiting review queue items |
-| `/api/coderabbit-auth/login` | `POST` | Starts browser-based CodeRabbit CLI OAuth login |
-| `/api/coderabbit-auth` | `GET` | Returns CodeRabbit CLI login progress |
+| `/api/coderabbit-auth` | `GET` | Returns the current CodeRabbit CLI authentication status |
 | `/api/config` | `GET` | Returns runtime operational settings (`poll_interval_seconds`, `max_files_limit`, etc.) |
 | `/api/config` | `POST` | Updates runtime operational settings in `config.json` live |
 | `/api/strict-approval/toggle` | `POST` | Toggles strict approval mode on/off |
