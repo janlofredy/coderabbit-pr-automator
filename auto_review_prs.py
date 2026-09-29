@@ -154,17 +154,10 @@ class AutoReviewEngine:
                 break
 
         env = os.environ.copy()
-        api_key = self.config_manager.get_coderabbit_api_key()
-        if api_key:
-            # Headless Docker environments cannot complete browser login. Use
-            # CodeRabbit's supported per-review Agentic API key option directly.
-            region = os.getenv("CODERABBIT_REGION", "").strip().lower()
-            if region == "eu":
-                cmd.extend(["--region", "eu"])
-            cmd.extend(["--api-key", api_key])
-            env["CODERABBIT_API_KEY"] = api_key
-        logged_cmd = ["[REDACTED]" if api_key and part == api_key else part for part in cmd]
-        logger.info("Executing CodeRabbit CLI: %s in %s", " ".join(logged_cmd), repo_path)
+        # Authentication comes from the user's persisted CLI login mounted at
+        # the CLI home; do not silently switch to environment API-key auth.
+        env.pop("CODERABBIT_API_KEY", None)
+        logger.info("Executing CodeRabbit CLI: %s in %s", " ".join(cmd), repo_path)
 
         try:
             res = subprocess.run(
@@ -178,14 +171,12 @@ class AutoReviewEngine:
             )
             stdout = res.stdout or ""
             stderr = res.stderr or ""
-            if api_key:
-                stdout = stdout.replace(api_key, "[REDACTED]")
-                stderr = stderr.replace(api_key, "[REDACTED]")
             combined = f"{stdout}\n{stderr}".lower()
             if res.returncode != 0 and "environment_unsupported" in combined:
                 stderr = (
-                    f"{stderr}\nHeadless CodeRabbit authentication is required. "
-                    "Create an Agentic API key and save it in Dashboard Settings under CodeRabbit API Key."
+                    f"{stderr}\nThe container has no valid CodeRabbit CLI login. Run 'coderabbit auth login' "
+                    "on a machine with a browser, then mount that CLI home at /root/.coderabbit. "
+                    "Verify the login with 'coderabbit auth status' in the CLI environment."
                 )
             return res.returncode, stdout, stderr
         except subprocess.TimeoutExpired as e:

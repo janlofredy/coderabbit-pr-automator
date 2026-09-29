@@ -51,7 +51,7 @@ The dashboard composes two management services:
 
 `web_dashboard.py` connects these services to the HTTP API and builds the dashboard status response. Repository discovery and review execution remain separate responsibilities; review runs are still processed one PR at a time.
 
-Repository discovery appears in the global activity notification. Review phases and outcomes appear on their respective PR cards, which are grouped by repository while retaining their current order within each repository.
+Repository discovery appears in the global activity notification. Review phases and outcomes appear on their respective PR cards, which are grouped by repository while retaining their current order within each repository. PR-specific review requests enter a FIFO Review Queue shown on the dashboard; one queued PR is reviewed at a time.
 
 ---
 
@@ -106,9 +106,11 @@ Requires a **GitHub Personal Access Token** (Classic or Fine-Grained) with:
 - Set via `GITHUB_TOKEN` environment variable.
 
 ### 2. CodeRabbit Authentication
-Use a CodeRabbit **Agentic API key** for headless Docker reviews. Enter it in **⚙️ Settings** in the dashboard; it is passed to each CLI review and takes effect immediately. You can also provide the key through the `CODERABBIT_API_KEY` environment variable.
+Use the normal CodeRabbit CLI browser login on the Docker host. Install the CLI there, then run `coderabbit auth login` and verify with `coderabbit auth status`. For EU accounts, use `coderabbit auth login --region eu`. The default Compose file mounts the host CLI state from `~/.coderabbit` into the container, so the service reuses that login. Set `CODERABBIT_CLI_HOME` in `.env` if your CLI stores its state in a different directory.
 
-Browser-based CLI login is unavailable inside a headless container. See the [CodeRabbit headless CLI guide](https://docs.coderabbit.ai/cli/headless-cli-integration) for Agentic API key requirements and EU-region setup.
+The CasaOS compose file mounts `/DATA/AppData/coderabbit/coderabbit-cli` as the CLI home. If CodeRabbit CLI is installed on the CasaOS host, authenticate there and copy its state with `mkdir -p /DATA/AppData/coderabbit/coderabbit-cli && cp -a ~/.coderabbit/. /DATA/AppData/coderabbit/coderabbit-cli/`. If you authenticate on another machine, securely copy that machine's `.coderabbit` directory to the same CasaOS path. Keep the CLI state private; it contains login credentials. The app's own configuration remains in `/DATA/AppData/coderabbit/config`.
+
+For a manual browser login that must complete from a remote host, CodeRabbit documents port forwarding for the localhost callback. See the [CLI setup guide](https://docs.coderabbit.ai/cli/) and [auth command reference](https://docs.coderabbit.ai/cli/reference).
 
 ---
 
@@ -117,10 +119,9 @@ Browser-based CLI login is unavailable inside a headless container. See the [Cod
 | Variable | Description | Default |
 | :--- | :--- | :--- |
 | `GITHUB_TOKEN` | GitHub Personal Access Token (`repo` scope) | *Required* |
-| `CODERABBIT_API_KEY` | CodeRabbit Agentic API key for headless reviews | Optional; can be set in dashboard settings |
-| `CODERABBIT_REGION` | CodeRabbit account region (`us` or `eu`) | `us` |
+| `CODERABBIT_CLI_HOME` | Host path containing the authenticated CodeRabbit CLI state mounted by Docker Compose | `${HOME}/.coderabbit` |
 
-> 💡 **Note**: All other operational configuration (monitored repositories, polling intervals, max file limits, auto-approvals, strict approval mode, and CodeRabbit API keys) is persisted in `config.json` on the mounted storage volume and can be changed live from the Web Dashboard without recreating or restarting the container.
+> 💡 **Note**: Repository settings, polling intervals, max file limits, auto-approvals, and strict approval mode are persisted in the app's mounted data directory and can be changed live from the Web Dashboard without recreating or restarting the container. CodeRabbit authentication is managed by the CLI, outside the dashboard.
 
 ---
 
@@ -128,7 +129,7 @@ Browser-based CLI login is unavailable inside a headless container. See the [Cod
 
 | Endpoint | Method | Description |
 | :--- | :--- | :--- |
-| `/api/status` | `GET` | Returns aggregated status, active rate limits, strict approval mode, and PR list |
+| `/api/status` | `GET` | Returns aggregated status, active rate limits, strict approval mode, PR list, and active/waiting review queue items |
 | `/api/config` | `GET` | Returns runtime operational settings (`poll_interval_seconds`, `max_files_limit`, etc.) |
 | `/api/config` | `POST` | Updates runtime operational settings in `config.json` live |
 | `/api/strict-approval/toggle` | `POST` | Toggles strict approval mode on/off |
@@ -136,7 +137,7 @@ Browser-based CLI login is unavailable inside a headless container. See the [Cod
 | `/api/repos/toggle` | `POST` | Toggles repository state: `{"full_name": "owner/repo"}` |
 | `/api/repos/add` | `POST` | Adds and validates repository: `{"full_name": "owner/repo"}` |
 | `/api/repos/remove` | `POST` | Removes repository: `{"full_name": "owner/repo"}` |
-| `/api/trigger` | `POST` | Triggers review: `{"force": false, "pr_key": "owner/repo#1"}` |
+| `/api/trigger` | `POST` | Starts a full scan, or queues a selected PR: `{"force": false, "pr_key": "owner/repo#1"}` |
 | `/api/clear-rate-limit` | `POST` | Clears active rate limit cooldown |
 | `/api/service/toggle` | `POST` | Pauses or resumes background review worker |
 | `/reports/<file>` | `GET` | Serves generated HTML review reports |

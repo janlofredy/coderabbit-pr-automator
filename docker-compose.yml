@@ -12,8 +12,8 @@ services:
       - "${PORT:-8765}:8765"
     environment:
       - GITHUB_TOKEN=${GITHUB_TOKEN}
-      - CODERABBIT_REGION=${CODERABBIT_REGION:-us}
     volumes:
-      - ./data/config:/root/.coderabbit
-      - ./data/reviews:/root/.coderabbit/reviews
+      - ./data/config:/app/data
+      - ./data/reviews:/app/data/reviews
+      - ${CODERABBIT_CLI_HOME:-${HOME}/.coderabbit}:/root/.coderabbit
       - ./data/repos:/app/repos

@@ -9,10 +9,10 @@ services:
       - "8765:8765"
     environment:
       - GITHUB_TOKEN=YOUR_GITHUB_TOKEN_HERE
-      - CODERABBIT_REGION=us
     volumes:
-      - /DATA/AppData/coderabbit/config:/root/.coderabbit
-      - /DATA/AppData/coderabbit/reviews:/root/.coderabbit/reviews
+      - /DATA/AppData/coderabbit/config:/app/data
+      - /DATA/AppData/coderabbit/reviews:/app/data/reviews
+      - /DATA/AppData/coderabbit/coderabbit-cli:/root/.coderabbit
       - /DATA/AppData/coderabbit/repos:/app/repos
 
 x-casaos:

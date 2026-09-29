@@ -316,8 +316,7 @@ Review complete. Detailed findings submitted directly to this pull request."""
         self.assertTrue(has_reviewed)
         self.assertEqual(outcome, "APPROVED")
 
-    def test_cli_uses_api_key_from_config(self):
-        self.cfg_mgr.set_coderabbit_api_key("test-cr-api-key-999")
+    def test_cli_uses_persisted_cli_login_without_api_key_flag(self):
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout='{"findings": []}', stderr="")
             retcode, stdout, stderr = self.engine.execute_coderabbit_cli("/fake/path", "main")
@@ -325,9 +324,9 @@ Review complete. Detailed findings submitted directly to this pull request."""
             mock_run.assert_called_once()
             call_kwargs = mock_run.call_args[1]
             self.assertIn("env", call_kwargs)
-            self.assertEqual(call_kwargs["env"].get("CODERABBIT_API_KEY"), "test-cr-api-key-999")
+            self.assertNotIn("--api-key", mock_run.call_args[0][0])
+            self.assertNotIn("CODERABBIT_API_KEY", call_kwargs["env"])
 
 if __name__ == "__main__":
     unittest.main()
-
 

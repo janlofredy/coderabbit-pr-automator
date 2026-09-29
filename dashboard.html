@@ -299,6 +299,19 @@
             margin-bottom: 1.8rem;
         }
 
+        .review-queue-panel {
+            margin: 0 0 2rem;
+            padding: 1rem 1.25rem;
+            background: var(--surface-color);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+        }
+        .review-queue-header { display: flex; align-items: baseline; gap: 0.65rem; margin: 0 0 0.8rem; }
+        .review-queue-header h2 { margin: 0; font-size: 1.05rem; }
+        .review-queue-list { display: grid; gap: 0.5rem; }
+        .review-queue-item { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.45rem; padding: 0.65rem 0.75rem; background: var(--bg-color); border-radius: 6px; }
+        .review-queue-empty { color: var(--text-muted); font-size: 0.9rem; }
+
         .pr-card {
             background-color: var(--surface-color);
             border: 1px solid var(--border-color);
@@ -514,6 +527,16 @@
         <span id="processing-banner-state" class="badge badge-purple" style="font-size: 0.75rem;">CHECKING REPOS</span>
     </div>
 
+    <section class="review-queue-panel" aria-labelledby="review-queue-title">
+        <div class="review-queue-header">
+            <h2 id="review-queue-title">Review Queue</h2>
+            <span id="review-queue-count" class="badge badge-gray">0 queued</span>
+        </div>
+        <div id="review-queue-list" class="review-queue-list">
+            <div class="review-queue-empty">No pull requests are waiting for review.</div>
+        </div>
+    </section>
+
     <main>
         <div class="stats-bar">
             <div class="stat-card">
@@ -608,12 +631,6 @@
                     <small style="color: var(--text-muted); font-size: 0.75rem; margin-left: 1.6rem;">If enabled, any minor issue or warning prevents approval (submits <code>COMMENT</code> instead).</small>
                 </div>
 
-                <div>
-                    <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem;">CodeRabbit API Key (Optional)</label>
-                    <input type="password" id="setting-coderabbit-key" class="form-input" placeholder="Leave blank to keep existing key, or type new key">
-                    <small style="color: var(--text-muted); font-size: 0.75rem; display: block; margin-top: 0.3rem;">Use an Agentic API key for headless Docker reviews. The key is passed to the CodeRabbit CLI for each review.</small>
-                    <div id="setting-key-status" style="font-size: 0.75rem; margin-top: 0.35rem; color: var(--text-muted);"></div>
-                </div>
             </div>
 
             <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--border-color);">
@@ -772,6 +789,30 @@
 
             // PR Grid
             renderPRs(data.pull_requests || []);
+            renderReviewQueue(data.review_queue || { active: null, pending: [] }, data.pull_requests || []);
+        }
+
+        function renderReviewQueue(queue, prs) {
+            const list = document.getElementById('review-queue-list');
+            const count = document.getElementById('review-queue-count');
+            if (!list || !count) return;
+            const pending = queue.pending || [];
+            const active = queue.active ? [queue.active] : [];
+            const items = [...active, ...pending];
+            count.textContent = `${pending.length} waiting${active.length ? ` · ${active.length} reviewing` : ''}`;
+            count.className = active.length ? 'badge badge-blue' : pending.length ? 'badge badge-purple' : 'badge badge-gray';
+            if (!items.length) {
+                list.innerHTML = '<div class="review-queue-empty">No pull requests are waiting for review.</div>';
+                return;
+            }
+            const prsByKey = new Map(prs.map(pr => [pr.pr_key, pr]));
+            list.innerHTML = items.map((item, index) => {
+                const pr = prsByKey.get(item.pr_key) || {};
+                const state = index === 0 && active.length ? 'Review in progress' : 'Waiting';
+                const title = pr.title ? ` — ${escapeHtml(pr.title)}` : '';
+                const repoNum = pr.repo && pr.number ? `${escapeHtml(pr.repo)} #${pr.number}` : escapeHtml(item.pr_key);
+                return `<div class="review-queue-item"><span class="badge ${state === 'Review in progress' ? 'badge-blue' : 'badge-gray'}">${state}</span><strong>${repoNum}</strong><span>${title}</span>${item.force ? '<span class="badge badge-orange">Force</span>' : ''}</div>`;
+            }).join('');
         }
 
         function getBadgeInfo(pr) {
@@ -970,9 +1011,11 @@
                 });
                 const data = await res.json();
                 if (res.ok) {
-                    showToast(`Review initiated for ${prKey}!`, 'success');
+                    showToast(`Review queued for ${prKey}.`, 'success');
                 } else {
-                    showToast(`Failed to trigger review for ${prKey}: ${data.error || 'Server error'}`, 'error');
+                    showToast(data.status === 'already_queued_or_busy'
+                        ? `${prKey} is already queued, or a full review scan is currently running.`
+                        : `Failed to queue review for ${prKey}: ${data.error || 'Server error'}`, 'error');
                 }
                 await fetchStatus();
             } catch (e) {
@@ -1183,13 +1226,6 @@
             document.getElementById('setting-auto-approve').checked = (cfg.auto_approve !== false);
             document.getElementById('setting-strict-approval').checked = (cfg.strict_approval !== false);
             
-            const keyStatus = document.getElementById('setting-key-status');
-            if (cfg.has_coderabbit_api_key) {
-                keyStatus.innerHTML = `<span style="color: #34d399;">● Configured (${cfg.coderabbit_api_key_masked || 'Active'})</span> — enter new key to replace, or enter <code>none</code> to remove.`;
-            } else {
-                keyStatus.innerHTML = `<span style="color: #94a3b8;">○ Not configured (running in Free Tier mode)</span>`;
-            }
-            document.getElementById('setting-coderabbit-key').value = '';
         }
 
         function setPollPreset(seconds) {
@@ -1203,7 +1239,6 @@
             const maxFiles = parseInt(document.getElementById('setting-max-files').value, 10);
             const autoApprove = document.getElementById('setting-auto-approve').checked;
             const strictApproval = document.getElementById('setting-strict-approval').checked;
-            const keyInput = document.getElementById('setting-coderabbit-key').value.trim();
 
             if (isNaN(pollInterval) || pollInterval < 10) {
                 msgEl.style.color = '#ef4444';
@@ -1224,10 +1259,6 @@
                 auto_approve: autoApprove,
                 strict_approval: strictApproval
             };
-
-            if (keyInput) {
-                payload.coderabbit_api_key = (keyInput.toLowerCase() === 'none' || keyInput.toLowerCase() === 'clear') ? '' : keyInput;
-            }
 
             msgEl.style.color = '#38bdf8';
             msgEl.textContent = 'Saving settings to config.json...';

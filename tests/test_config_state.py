@@ -144,22 +144,18 @@ class TestConfigAndStateManager(unittest.TestCase):
         self.assertEqual(settings["max_files_limit"], 100)
         self.assertTrue(settings["auto_approve"])
         self.assertTrue(settings["strict_approval"])
-        self.assertFalse(settings["has_coderabbit_api_key"])
 
         # Update settings at runtime
         updated = mgr.update_settings({
             "poll_interval_seconds": 300,
             "max_files_limit": 50,
             "auto_approve": False,
-            "strict_approval": False,
-            "coderabbit_api_key": "cr-secret-test-key-1234"
+            "strict_approval": False
         })
         self.assertEqual(updated["poll_interval_seconds"], 300)
         self.assertEqual(updated["max_files_limit"], 50)
         self.assertFalse(updated["auto_approve"])
         self.assertFalse(updated["strict_approval"])
-        self.assertTrue(updated["has_coderabbit_api_key"])
-        self.assertEqual(mgr.get_coderabbit_api_key(), "cr-secret-test-key-1234")
 
     def test_pr_logs_persistence(self):
         sm = StateManager(state_path=self.state_path)
@@ -194,6 +190,5 @@ class TestConfigAndStateManager(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
 
 

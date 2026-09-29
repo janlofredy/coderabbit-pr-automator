@@ -96,9 +96,9 @@ class DashboardBackend:
                     break
                 time.sleep(5)
 
-    def run_review_scan(self, force: bool = False, pr_key: Optional[str] = None) -> None:
+    def run_review_scan(self, force: bool = False, pr_key: Optional[str] = None) -> bool:
         """Compatibility facade; review scheduling lives in its service."""
-        self.review_service.run_review_scan(force=force, pr_key=pr_key)
+        return self.review_service.run_review_scan(force=force, pr_key=pr_key)
 
     def get_annotated_status(self) -> Dict[str, Any]:
         """Overlays real-time state manager data onto cached PR records for sub-millisecond response."""
@@ -235,7 +235,8 @@ class DashboardBackend:
             "authenticated_user": auth_user,
             "scan_in_progress": self.review_service.scan_in_progress,
             "scan_phase": self.review_service.scan_phase,
-            "repository_status": self.repository_service.get_status()
+            "repository_status": self.repository_service.get_status(),
+            "review_queue": self.review_service.get_review_queue(),
         }
 
     def get_pr_details(self, pr_key: str) -> Optional[Dict[str, Any]]:
@@ -424,9 +425,10 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         if path == "/api/trigger":
             force = data.get("force", False)
             pr_key = data.get("pr_key")
-            backend.run_review_scan(force=force, pr_key=pr_key)
-            self._set_headers(200)
-            self.wfile.write(json.dumps({"status": "triggered", "force": force, "pr_key": pr_key}).encode("utf-8"))
+            accepted = backend.run_review_scan(force=force, pr_key=pr_key)
+            self._set_headers(200 if accepted else 409)
+            response_status = "queued" if accepted and pr_key else "triggered" if accepted else "already_queued_or_busy"
+            self.wfile.write(json.dumps({"status": response_status, "force": force, "pr_key": pr_key}).encode("utf-8"))
             return
 
         if path == "/api/clear-rate-limit":
