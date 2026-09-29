@@ -796,16 +796,15 @@ class AutoReviewEngine:
                 comments=line_comments if line_comments else None
             )
             logger.info("Submitted %s review on %s (PR #%s)", event, full_name, pr_number)
-            if line_comments:
-                resolved_count = self.github_client.resolve_previous_review_threads(
-                    owner,
-                    repo_name,
-                    pr_number,
-                    auth_user or "",
-                    keep_review_id=submitted_review.get("id"),
-                )
-                if resolved_count:
-                    logger.info("Resolved %d previous review thread(s) by %s on %s PR #%s", resolved_count, auth_user, full_name, pr_number)
+            resolved_count = self.github_client.resolve_previous_review_threads(
+                owner,
+                repo_name,
+                pr_number,
+                auth_user or "",
+                keep_review_id=submitted_review.get("id"),
+            )
+            if resolved_count:
+                logger.info("Resolved %d previous review thread(s) by %s on %s PR #%s", resolved_count, auth_user, full_name, pr_number)
         except Exception as e:
             logger.error("Failed to submit PR review on %s: %s", pr_key, e)
             self.state_manager.set_pr_reviewing(pr_key, False)
