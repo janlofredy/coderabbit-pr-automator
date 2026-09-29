@@ -82,15 +82,21 @@ class AutoReviewEngine:
         return True
 
     def checkout_pr(self, repo_path: str, pr_number: int, base_ref: str) -> bool:
-        """Fetches the PR head ref and checks it out locally."""
+        """Fetches the PR head without updating a possibly checked-out local branch."""
         self.last_checkout_error = ""
+        pr_ref = f"refs/remotes/origin/pr-{pr_number}"
         try:
-            # Fetch base branch
-            self.run_git(repo_path, ["fetch", "origin", base_ref])
-            # Fetch PR branch ref
-            self.run_git(repo_path, ["fetch", "origin", f"pull/{pr_number}/head:pr-{pr_number}", "--force"])
-            # Checkout PR branch
-            self.run_git(repo_path, ["checkout", f"pr-{pr_number}", "--force"])
+            # Keep both fetches on remote-tracking refs. Updating refs/heads/pr-N
+            # fails when a previous review left that branch checked out.
+            self.run_git(repo_path, ["fetch", "origin", f"{base_ref}:refs/remotes/origin/{base_ref}", "--force"])
+            self.run_git(repo_path, ["fetch", "origin", f"pull/{pr_number}/head:{pr_ref}", "--force"])
+
+            current_head = self.run_git(repo_path, ["rev-parse", "HEAD"]).stdout.strip()
+            fetched_head = self.run_git(repo_path, ["rev-parse", pr_ref]).stdout.strip()
+            if current_head != fetched_head:
+                # Detaching leaves any legacy local pr-N branch untouched and
+                # prevents Git from blocking later updates to the PR ref.
+                self.run_git(repo_path, ["checkout", "--detach", "--force", pr_ref])
             # Clean untracked files
             self.run_git(repo_path, ["clean", "-fd"])
             return True
@@ -103,7 +109,7 @@ class AutoReviewEngine:
     def count_changed_files(self, repo_path: str, base_ref: str, pr_number: int) -> int:
         """Counts modified files between base and PR branch."""
         try:
-            res = self.run_git(repo_path, ["diff", "--name-only", f"origin/{base_ref}...pr-{pr_number}"])
+            res = self.run_git(repo_path, ["diff", "--name-only", f"origin/{base_ref}...refs/remotes/origin/pr-{pr_number}"])
             files = [line.strip() for line in res.stdout.strip().split("\n") if line.strip()]
             return len(files)
         except Exception as e:
@@ -117,7 +123,7 @@ class AutoReviewEngine:
         """
         valid_lines: Dict[str, set] = {}
         try:
-            res = self.run_git(repo_path, ["diff", "-U0", f"origin/{base_ref}...pr-{pr_number}"])
+            res = self.run_git(repo_path, ["diff", "-U0", f"origin/{base_ref}...refs/remotes/origin/pr-{pr_number}"])
             current_file = None
             diff_pattern = re.compile(r"^\@\@\s+-[0-9]+(?:,[0-9]+)?\s+\+([0-9]+)(?:,([0-9]+))?\s+\@\@")
 
