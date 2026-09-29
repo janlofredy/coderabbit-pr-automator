@@ -106,11 +106,11 @@ Requires a **GitHub Personal Access Token** (Classic or Fine-Grained) with:
 - Set via `GITHUB_TOKEN` environment variable.
 
 ### 2. CodeRabbit Authentication
-Click **Login with Google** in the dashboard header, then choose **Continue with Google** on the CodeRabbit sign-in page. The dashboard starts the official CLI browser OAuth flow and stores its credentials in the mounted CLI home. The default Compose file persists this state under `~/.coderabbit`; set `CODERABBIT_CLI_HOME` in `.env` to change the host path. EU users can continue using `coderabbit auth login --region eu` on the host and mount that CLI state as before.
+The CodeRabbit CLI disables browser OAuth inside Docker/CI. Run `coderabbit auth login` on the Docker host, choose **Continue with Google** in the browser, and verify with `coderabbit auth status`. The default Compose file mounts the host's `~/.coderabbit` directory directly into the container, so no copy is needed. If `CODERABBIT_CLI_HOME` points to a different host path, copy the authenticated `.coderabbit` contents there. EU users can run `coderabbit auth login --region eu` on the host.
 
-The CasaOS compose file uses one storage mount, `/DATA/AppData/coderabbit:/app/data`. Inside it, app settings are stored under `config`, review reports under `reviews`, repository checkouts under `repos`, and CodeRabbit CLI credentials under `coderabbit-cli`. Use **Login with Google** in the dashboard to save credentials there. Alternatively, authenticate with `coderabbit auth login` on another machine and securely copy that machine's `.coderabbit` directory to `/DATA/AppData/coderabbit/coderabbit-cli/`. Keep the CLI state private; it contains login credentials.
+The CasaOS compose file uses one storage mount, `/DATA/AppData/coderabbit:/app/data`. Inside it, app settings are stored under `config`, review reports under `reviews`, repository checkouts under `repos`, and CodeRabbit CLI credentials under `coderabbit-cli`. Authenticate with `coderabbit auth login` on a machine with a browser, then securely copy that machine's `.coderabbit` directory contents to `/DATA/AppData/coderabbit/coderabbit-cli/`. Keep the CLI state private; it contains login credentials.
 
-For a manual browser login that must complete from a remote host, CodeRabbit documents port forwarding for the localhost callback. See the [CLI setup guide](https://docs.coderabbit.ai/cli/) and [auth command reference](https://docs.coderabbit.ai/cli/reference).
+The dashboard detects the CLI's unsupported-environment response and shows these host-login steps. For headless or bot-driven authentication, use an Agentic API key with `coderabbit auth login --api-key "<key>"`; see the [CLI auth reference](https://docs.coderabbit.ai/cli/reference).
 
 ---
 

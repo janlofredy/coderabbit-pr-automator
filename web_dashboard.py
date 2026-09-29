@@ -132,8 +132,17 @@ class DashboardBackend:
             if not line:
                 continue
             url_match = re.search(r"https?://[^\s\"'<>]+", line)
+            try:
+                event = json.loads(line)
+            except (TypeError, ValueError):
+                event = None
             with self._auth_lock:
-                if url_match:
+                if (isinstance(event, dict) and event.get("type") == "error"
+                        and event.get("phase") == "auth"
+                        and event.get("status") == "environment_unsupported"):
+                    self._auth_state["status"] = "environment_unsupported"
+                    self._auth_state["message"] = "Google browser sign-in is not supported from inside Docker/CI. Authenticate on the Docker host instead."
+                elif url_match:
                     self._auth_state["url"] = url_match.group(0).rstrip(".,)")
                     self._auth_state["status"] = "waiting"
                     self._auth_state["message"] = "Open the sign-in page and choose Continue with Google."
@@ -143,7 +152,7 @@ class DashboardBackend:
         with self._auth_lock:
             if code == 0:
                 self._auth_state = {"status": "authenticated", "url": None, "message": "CodeRabbit login completed."}
-            else:
+            elif self._auth_state.get("status") != "environment_unsupported":
                 self._auth_state["status"] = "error"
                 if not self._auth_state.get("message"):
                     self._auth_state["message"] = f"CodeRabbit login exited with status {code}."

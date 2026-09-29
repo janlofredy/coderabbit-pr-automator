@@ -595,9 +595,16 @@
                 <h3>🐰 CodeRabbit Login</h3>
                 <button class="btn btn-sm" onclick="closeCodeRabbitLogin()">✕</button>
             </div>
-            <p style="color: var(--text-muted);">Sign in to CodeRabbit in the browser window. Choose <strong>Continue with Google</strong> on the CodeRabbit page to authenticate the CLI.</p>
+            <p style="color: var(--text-muted);">The CLI will start browser sign-in when the environment supports it. Docker and CI block browser OAuth; if that happens, use the host login steps shown here.</p>
             <div id="coderabbit-auth-message" style="margin: 1rem 0;">Preparing sign-in…</div>
             <a id="coderabbit-auth-link" class="btn btn-primary" href="#" target="_blank" rel="noopener noreferrer" style="display:none; text-decoration:none;">Open CodeRabbit sign-in</a>
+            <div id="coderabbit-auth-help" style="display:none; margin-top:1rem;">
+                <p>Docker/CI blocks CodeRabbit browser OAuth. Run this on the Docker host, then reload the dashboard. The default Compose setup mounts this same <code>~/.coderabbit</code> directory into the container.</p>
+                <pre style="white-space:pre-wrap; padding:0.85rem; background:#111827; border-radius:6px;">coderabbit auth login
+# Choose Continue with Google in the browser
+coderabbit auth status</pre>
+                <p>For CasaOS, authenticate on a machine with the CLI, then copy its login state to <code>/DATA/AppData/coderabbit/coderabbit-cli</code>. For headless environments, use an Agentic API key: <a href="https://docs.coderabbit.ai/cli/reference" target="_blank" rel="noopener noreferrer">CLI authentication reference</a>.</p>
+            </div>
             <div style="display:flex; justify-content:flex-end; margin-top:1.25rem;">
                 <button class="btn btn-secondary" onclick="closeCodeRabbitLogin()">Close</button>
             </div>
@@ -1222,6 +1229,7 @@
         document.getElementById('coderabbit-auth-modal').classList.add('active');
         const message = document.getElementById('coderabbit-auth-message');
         const link = document.getElementById('coderabbit-auth-link');
+        document.getElementById('coderabbit-auth-help').style.display = 'none';
         message.textContent = 'Preparing sign-in…';
         link.style.display = 'none';
         try {
@@ -1238,7 +1246,9 @@
     function showCodeRabbitAuthState(state) {
         const message = document.getElementById('coderabbit-auth-message');
         const link = document.getElementById('coderabbit-auth-link');
+        const help = document.getElementById('coderabbit-auth-help');
         message.textContent = state.status === 'authenticated' ? 'Signed in successfully. The review service will use this CLI login.' : (state.message || 'Waiting for CodeRabbit sign-in…');
+        help.style.display = state.status === 'environment_unsupported' ? 'block' : 'none';
         if (state.url) {
             try {
                 const parsed = new URL(state.url);
@@ -1248,7 +1258,7 @@
                 }
             } catch (_) { /* Ignore malformed CLI output. */ }
         }
-        if (state.status === 'authenticated' || state.status === 'error') {
+        if (state.status === 'authenticated' || state.status === 'error' || state.status === 'environment_unsupported') {
             if (coderabbitAuthPoll) clearInterval(coderabbitAuthPoll);
             coderabbitAuthPoll = null;
         }
