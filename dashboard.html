@@ -899,7 +899,6 @@
                     <h3 class="repo-pr-group-header">📁 ${escapeHtml(repo)} <span class="repo-pr-group-count">${repoPRs.length} ${repoPRs.length === 1 ? 'pull request' : 'pull requests'}</span></h3>
                     <div class="repo-pr-grid">
                         ${repoPRs.map(pr => {
-                const hasReport = !!pr.report_file;
                 const otherApproved = (pr.other_approved_by || []).length > 0 ? `<span>👍 Approved by: <strong>${escapeHtml(pr.other_approved_by.join(', '))}</strong></span>` : '';
 
                 // Generate status pills
@@ -972,7 +971,7 @@
                             <span class="repo-badge">${escapeHtml(pr.repo)} #${pr.number}</span>
                             <span class="badge badge-base" title="Target base branch: ${escapeHtml(pr.base_ref)}">🎯 ${escapeHtml(baseBranchUpper)}</span>
                         </div>
-                        <a href="${pr.html_url}" target="_blank" class="pr-title">${escapeHtml(pr.title)}</a>
+                        <a href="/pr-details?pr_key=${encodeURIComponent(pr.pr_key)}" class="pr-title">${escapeHtml(pr.title)}</a>
                         <div class="pr-meta">
                             <span>👤 <strong>${escapeHtml(pr.author)}</strong></span>
                             <span>🌱 <code>${escapeHtml(pr.head_ref)}</code></span>
@@ -986,8 +985,7 @@
                         ${pr.status_badge === 'RATE_LIMITED' ? `<button class="btn btn-sm btn-danger" style="margin: -0.5rem 0 1rem;" onclick="clearRateLimit(this)">Clear shared cooldown</button>` : ''}
                     </div>
                     <div class="pr-actions">
-                        <a href="/pr-details?pr_key=${encodeURIComponent(pr.pr_key)}" class="btn btn-sm btn-primary" title="View complete execution logs and review diagnostics">📋 Details & Logs</a>
-                        ${hasReport ? `<a href="/reports/${pr.report_file}" target="_blank" class="btn btn-sm">📄 View Report</a>` : ''}
+                        <a href="/pr-details?pr_key=${encodeURIComponent(pr.pr_key)}" class="btn btn-sm btn-primary" title="View pull request details">Details</a>
                         <a href="${pr.html_url}" target="_blank" class="btn btn-sm">GitHub ↗</a>
                         <button class="btn btn-sm" onclick="triggerReview('${pr.pr_key}', false, event)">⚡ Review</button>
                         <button class="btn btn-sm btn-warning" onclick="triggerReview('${pr.pr_key}', true, event)" title="Bypass rate limit or prior review">⚡ Force</button>
