@@ -6,20 +6,32 @@ echo "  🐰 CodeRabbit PR Auto-Reviewer for CasaOS & Docker"
 echo "=========================================================="
 
 # Ensure directories exist
-mkdir -p /app/data/reviews
+mkdir -p /app/data/config /app/data/reviews /app/data/repos
 mkdir -p /app/repos
+
+# In the single-volume CasaOS layout, keep CodeRabbit's normal ~/.coderabbit
+# path mapped to its dedicated subdirectory beside the app's data folders.
+if [ "${HOME:-}" = "/app/data" ]; then
+    mkdir -p /app/data/coderabbit-cli
+    if [ -L /app/data/.coderabbit ]; then
+        ln -sfn /app/data/coderabbit-cli /app/data/.coderabbit
+    elif [ ! -e /app/data/.coderabbit ]; then
+        ln -s /app/data/coderabbit-cli /app/data/.coderabbit
+    fi
+fi
 
 # Configure basic git identity for diffing & fetching
 git config --global user.name "${GIT_USER_NAME:-CodeRabbit Auto-Reviewer}"
 git config --global user.email "${GIT_USER_EMAIL:-coderabbit-bot@users.noreply.github.com}"
 git config --global init.defaultBranch main
 
-# Use the user's manually authenticated CodeRabbit CLI state mounted at /root/.coderabbit.
-if [ -f "/root/.coderabbit/auth.json" ]; then
-    echo "🔑 Found mounted CodeRabbit CLI login at /root/.coderabbit/auth.json"
+# Use the user's manually authenticated CodeRabbit CLI state in its configured home.
+CLI_AUTH_DIR="${HOME:-/root}/.coderabbit"
+if [ -f "${CLI_AUTH_DIR}/auth.json" ]; then
+    echo "🔑 Found mounted CodeRabbit CLI login at ${CLI_AUTH_DIR}/auth.json"
 else
-    echo "⚠️ No CodeRabbit CLI login found at /root/.coderabbit/auth.json."
-    echo "   Run 'coderabbit auth login' on a machine with a browser, then mount that CLI home here."
+    echo "⚠️ No CodeRabbit CLI login found at ${CLI_AUTH_DIR}/auth.json."
+    echo "   Run 'coderabbit auth login' on a machine with a browser, then copy its .coderabbit state into the configured CLI home."
 fi
 
 # Authenticate GitHub CLI / git credentials if GITHUB_TOKEN is provided
