@@ -15,7 +15,9 @@ logger = logging.getLogger("auto_review")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
 DEFAULT_REVIEWS_DIR = os.getenv("REVIEWS_DIR", os.path.expanduser("~/.coderabbit/reviews"))
-DEFAULT_TIMEOUT_SECONDS = safe_int_env("CODERABBIT_TIMEOUT", 240)
+# CodeRabbit documents reviews that can take 7-30+ minutes. Keep the timeout
+# configurable, but don't abort normal reviews after the old four-minute limit.
+DEFAULT_TIMEOUT_SECONDS = safe_int_env("CODERABBIT_TIMEOUT", 2700)
 
 class AutoReviewEngine:
     """Core review engine coordinating Git sync, CodeRabbit CLI runs, and GitHub PR reviews."""
@@ -176,47 +178,97 @@ class AutoReviewEngine:
             return 127, "", "CodeRabbit CLI ('coderabbit') is not installed or not in PATH"
 
     def parse_coderabbit_output(self, stdout: str) -> Dict[str, Any]:
-        """Parses structured JSON from CodeRabbit agent output."""
+        """Parse JSON and line-oriented agent events without inventing clean results."""
         if not stdout.strip():
             logger.warning("CodeRabbit CLI returned empty stdout - no review output produced")
-            return {"findings": [], "summary": "No output from CodeRabbit CLI", "raw": ""}
+            return {"findings": [], "summary": "No output from CodeRabbit CLI", "raw": "", "valid": False}
 
         # Attempt direct JSON parse
         try:
             data = json.loads(stdout.strip())
             if isinstance(data, dict):
-                findings_count = len(data.get("findings", []))
+                raw_findings = data.get("findings")
+                if not isinstance(raw_findings, (list, dict)):
+                    raise ValueError("JSON result is missing a findings list")
+                findings_count = len(raw_findings)
                 logger.info("Parsed CodeRabbit JSON output: %d findings", findings_count)
-                if findings_count == 0:
-                    logger.warning("CodeRabbit returned valid JSON but 0 findings. Raw output length: %d chars", len(stdout))
-                return data
+                status = str(data.get("status", "")).lower()
+                valid = status not in ("failed", "error", "incomplete", "awaiting_confirmation", "review_skipped")
+                return {**data, "valid": valid, "completed": valid, "completion_status": status}
             elif isinstance(data, list):
                 logger.info("Parsed CodeRabbit JSON array output: %d items", len(data))
-                return {"findings": data, "summary": "CodeRabbit review completed"}
-        except json.JSONDecodeError:
+                return {"findings": data, "summary": "CodeRabbit review completed", "valid": True, "completed": True}
+        except (json.JSONDecodeError, ValueError):
             pass
 
-        # Attempt to extract JSON block enclosed in markdown or stdout
-        json_match = re.search(r"(\{.*\}|\[.*\])", stdout, re.DOTALL)
-        if json_match:
+        # Preserve support for a JSON result wrapped in a Markdown code fence.
+        for match in re.finditer(r"```(?:json)?\s*(.*?)\s*```", stdout, re.IGNORECASE | re.DOTALL):
             try:
-                data = json.loads(json_match.group(1))
-                if isinstance(data, dict):
-                    findings_count = len(data.get("findings", []))
-                    logger.info("Extracted CodeRabbit JSON from text: %d findings", findings_count)
-                    return data
-                elif isinstance(data, list):
-                    logger.info("Extracted CodeRabbit JSON array from text: %d items", len(data))
-                    return {"findings": data, "summary": "CodeRabbit review completed"}
-            except Exception:
-                pass
+                data = json.loads(match.group(1))
+                if isinstance(data, dict) and isinstance(data.get("findings"), (list, dict)):
+                    status = str(data.get("status", "")).lower()
+                    valid = status not in ("failed", "error", "incomplete", "awaiting_confirmation", "review_skipped")
+                    return {**data, "valid": valid, "completed": valid, "completion_status": status}
+                if isinstance(data, list):
+                    return {"findings": data, "summary": "CodeRabbit review completed", "valid": True, "completed": True}
+            except json.JSONDecodeError:
+                continue
+
+        # Agent mode emits one JSON event per line. A successful stream must
+        # contain a completion event; findings emitted before an error are partial.
+        events = []
+        for line in stdout.splitlines():
+            try:
+                value = json.loads(line.strip())
+                if isinstance(value, dict):
+                    events.append(value)
+            except json.JSONDecodeError:
+                continue
+
+        if events:
+            findings = []
+            completion = None
+            summaries = []
+            for event in events:
+                event_type = str(event.get("type", event.get("event", ""))).lower()
+                payload = event.get("data", event.get("payload", {}))
+                if not isinstance(payload, dict):
+                    payload = {}
+                if event_type in ("finding", "review_finding"):
+                    finding = event.get("finding", payload.get("finding", payload))
+                    if not finding:
+                        finding = {k: v for k, v in event.items() if k not in ("type", "event", "data", "payload")}
+                    if isinstance(finding, dict):
+                        findings.append(finding)
+                elif event_type in ("complete", "completed", "review_complete"):
+                    completion = {**payload, **event}
+                    completed_findings = event.get("findings", payload.get("findings"))
+                    if isinstance(completed_findings, list):
+                        findings.extend(f for f in completed_findings if isinstance(f, dict))
+                    summary = event.get("summary", payload.get("summary"))
+                    if isinstance(summary, str) and summary:
+                        summaries.append(summary)
+
+            completed = completion is not None
+            status = str((completion or {}).get("status", "")).lower()
+            valid_completion = completed and status not in ("failed", "error", "incomplete", "awaiting_confirmation", "review_skipped")
+            return {
+                "findings": findings,
+                "summary": "\n".join(summaries) or ("CodeRabbit review completed" if valid_completion else "CodeRabbit event stream did not complete successfully"),
+                "raw": stdout,
+                "valid": valid_completion,
+                "completed": completed,
+                "completion_status": status,
+            }
 
         logger.warning("Could not parse CodeRabbit output as JSON. Raw stdout (%d chars): %s",
                        len(stdout), stdout[:300])
         return {
             "findings": [],
-            "summary": stdout.strip(),
-            "raw": stdout
+            "summary": "CodeRabbit output was not valid structured review data",
+            "raw": stdout,
+            "valid": False,
+            "completed": False,
         }
 
     def generate_html_report(
@@ -429,7 +481,7 @@ class AutoReviewEngine:
             delay_sec = retry_delay if retry_delay > 0 else 900
             mins = max(1, delay_sec // 60)
             resume_time = (datetime.now(timezone.utc) + timedelta(seconds=delay_sec)).strftime("%H:%M:%S UTC")
-            reason_msg = "CLI Execution Timeout (240s)" if is_timeout else "Free Tier request quota / rate limit reached"
+            reason_msg = f"CLI execution timeout ({self.cli_timeout}s)" if is_timeout else "Free Tier request quota / rate limit reached"
 
             logger.warning("CodeRabbit rate limit or timeout triggered on %s: delay %ds (%s)", pr_key, delay_sec, reason_msg)
             self.state_manager.record_rate_limit(delay_sec, reason_msg, pr_key)
@@ -440,8 +492,8 @@ class AutoReviewEngine:
 - **Target Base Branch**: `{base_ref}`
 - **Head Branch**: `{head_ref}` (`{head_sha[:8]}`)
 ---
-### ⏳ CodeRabbit Free Tier Rate Limit Active
-> ⚠️ **CodeRabbit Free Tier request quota / rate limit reached**
+### ⏳ Review Temporarily Unavailable
+> ⚠️ **{reason_msg}**
 > - **Will retry in**: **~{mins} mins** (at `{resume_time}`)
 > - **Attempt**: {attempt} of 3
 """
@@ -462,8 +514,9 @@ class AutoReviewEngine:
             self.state_manager.record_pr_status(pr_key, status_data)
             return status_data
 
-        # If CodeRabbit returned an error not related to rate limits
-        if retcode != 0 and not stdout.strip():
+        # Nonzero exit means the review did not complete, even when the CLI
+        # emitted partial findings before failing.
+        if retcode != 0:
             logger.error("CodeRabbit review failed with exit code %s: %s", retcode, stderr)
             self.state_manager.set_pr_reviewing(pr_key, False)
             err_comment = f"""🐰 **Automated CodeRabbit Review Failed**
@@ -508,6 +561,32 @@ class AutoReviewEngine:
 
         # Parse findings
         parsed = self.parse_coderabbit_output(stdout)
+        if not parsed.get("valid"):
+            error_message = "CodeRabbit did not produce a confirmed, complete review result"
+            logger.error("%s for %s (exit=%s, status=%s)", error_message, pr_key, retcode, parsed.get("completion_status", "unknown"))
+            self.state_manager.set_pr_reviewing(pr_key, False)
+            failure_comment = f"""🐰 **Automated CodeRabbit Review Failed**
+- **Reviewer**: @{auth_user or 'coderabbit-bot'}
+- **Head Branch**: `{head_ref}` (`{head_sha[:8]}`)
+---
+> ❌ **Review result was incomplete or unreadable. No approval was submitted.**
+> Retry after checking the CodeRabbit CLI version and logs.
+"""
+            self.github_client.create_or_update_comment(owner, repo_name, pr_number, failure_comment, comment_id)
+            status_data = {"pr_key": pr_key, "status": "ERROR", "error": error_message, "head_sha": head_sha,
+                           "title": pr.get("title", ""), "html_url": pr.get("html_url", ""),
+                           "author": pr_author, "is_own_pr": is_own_pr}
+            self.state_manager.record_pr_log(pr_key, {
+                "status": "ERROR", "review_outcome": "ERROR", "retcode": retcode,
+                "elapsed_seconds": round(elapsed, 1), "head_sha": head_sha,
+                "base_ref": base_ref, "head_ref": head_ref, "author": pr_author,
+                "title": pr.get("title", ""), "html_url": pr.get("html_url", ""),
+                "file_count": file_count, "stdout": stdout, "stderr": stderr,
+                "error": error_message, "partial_findings": parsed.get("findings", [])
+            })
+            self.state_manager.record_pr_status(pr_key, status_data)
+            return status_data
+
         raw_findings = parsed.get("findings", [])
         if isinstance(raw_findings, dict):
             findings_list = list(raw_findings.values())
@@ -552,20 +631,7 @@ class AutoReviewEngine:
                 except (ValueError, TypeError):
                     pass
 
-        # Determine Review Event
-        suspicious_review = (
-            len(findings_list) == 0
-            and elapsed < 5.0
-            and file_count > 10
-        )
-        if suspicious_review:
-            logger.warning(
-                "Suspicious review for %s: 0 findings in %.1fs on %d files. "
-                "CodeRabbit CLI may not be producing real analysis. "
-                "Downgrading from APPROVE to COMMENT.",
-                pr_key, elapsed, file_count
-            )
-
+        # Determine Review Event only after the CLI reports a valid completion.
         if critical_major_count > 0:
             if is_own_pr:
                 # Self-Approval / Request Changes Prevention Guard on own PR
@@ -578,10 +644,6 @@ class AutoReviewEngine:
             # Strict mode: any minor issue prevents approval
             event = "COMMENT"
             review_outcome = "NEEDS_WORK (Minor Issues Detected)"
-        elif suspicious_review:
-            # Safety net: don't auto-approve if review seems ineffective
-            event = "COMMENT"
-            review_outcome = "REVIEW_INCONCLUSIVE"
         else:
             if auto_approve and not is_own_pr:
                 event = "APPROVE"
@@ -603,15 +665,6 @@ class AutoReviewEngine:
         )
 
         # Build GitHub review body
-        suspicious_note = ""
-        if suspicious_review:
-            suspicious_note = (
-                "\n> ⚠️ **Review Inconclusive**: CodeRabbit CLI completed in "
-                f"{elapsed:.1f}s with 0 findings on {file_count} files. "
-                "The review may not have performed full analysis. "
-                "Auto-approval has been withheld.\n"
-            )
-
         review_body = f"""## 🐰 CodeRabbit Automated Review
 
 - **Review Outcome**: `{review_outcome}`
@@ -620,7 +673,6 @@ class AutoReviewEngine:
 - **Minor / Warning Issues**: {minor_count}
 - **Total Findings**: {len(findings_list)}
 - **Execution Time**: {elapsed:.1f}s
-{suspicious_note}
 {summary_text}
 """
         try:
@@ -636,6 +688,29 @@ class AutoReviewEngine:
             logger.info("Submitted %s review on %s (PR #%s)", event, full_name, pr_number)
         except Exception as e:
             logger.error("Failed to submit PR review on %s: %s", pr_key, e)
+            self.state_manager.set_pr_reviewing(pr_key, False)
+            status_data = {"pr_key": pr_key, "status": "ERROR", "error": f"GitHub review submission failed: {e}",
+                           "review_outcome": "ERROR", "head_sha": head_sha,
+                           "title": pr.get("title", ""), "html_url": pr.get("html_url", ""),
+                           "author": pr_author, "is_own_pr": is_own_pr}
+            self.state_manager.record_pr_log(pr_key, {
+                "status": "ERROR", "review_outcome": "ERROR", "event": event,
+                "retcode": retcode, "elapsed_seconds": round(elapsed, 1), "head_sha": head_sha,
+                "base_ref": base_ref, "head_ref": head_ref, "author": pr_author,
+                "title": pr.get("title", ""), "html_url": pr.get("html_url", ""),
+                "file_count": file_count, "summary": summary_text, "findings": findings_list,
+                "stdout": stdout, "stderr": stderr, "error": str(e)
+            })
+            self.state_manager.record_pr_status(pr_key, status_data)
+            failure_comment = f"""🐰 **Automated CodeRabbit Review Failed**
+- **Reviewer**: @{auth_user or 'coderabbit-bot'}
+- **Head Branch**: `{head_ref}` (`{head_sha[:8]}`)
+---
+> ❌ **Analysis completed, but GitHub rejected the review submission.**
+> {str(e)[:500]}
+"""
+            self.github_client.create_or_update_comment(owner, repo_name, pr_number, failure_comment, comment_id)
+            return status_data
 
         # Update bot status comment to Completed
         completed_comment = f"""🐰 **Automated CodeRabbit Review Completed**
