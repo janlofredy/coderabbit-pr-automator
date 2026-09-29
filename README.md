@@ -28,6 +28,7 @@ A headless, continuous CI/CD background automation service and real-time Web Das
   - Persists cooldown state in `automation_state.json` to prevent burning quota.
 - **High-Performance Real-Time Web Dashboard (Port 8765)**:
   - Multi-threaded Python server (`ThreadingMixIn`) with non-blocking concurrent polling via `ThreadPoolExecutor` (sub-millisecond `/api/status`).
+  - Complete raw CodeRabbit CLI stdout and stderr are written to container logs and retained in each PR's **Details & Logs** history.
   - Real-time JavaScript countdown ticker: `"Will retry in 14 min 23s (at 16:45:00)"`.
   - Color-coded PR cards:
     - ⏳ **Rate Limited** (Orange)

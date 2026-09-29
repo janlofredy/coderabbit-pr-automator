@@ -171,6 +171,13 @@ class AutoReviewEngine:
             )
             stdout = res.stdout or ""
             stderr = res.stderr or ""
+            logger.info(
+                "Raw CodeRabbit results for %s (exit=%s):\n--- stdout ---\n%s\n--- stderr ---\n%s\n--- end CodeRabbit output ---",
+                os.path.basename(os.path.abspath(repo_path)),
+                res.returncode,
+                stdout if stdout else "<empty>",
+                stderr if stderr else "<empty>",
+            )
             combined = f"{stdout}\n{stderr}".lower()
             if res.returncode != 0 and "environment_unsupported" in combined:
                 stderr = (
@@ -181,7 +188,15 @@ class AutoReviewEngine:
             return res.returncode, stdout, stderr
         except subprocess.TimeoutExpired as e:
             logger.error("CodeRabbit CLI timed out after %ds", self.cli_timeout)
-            return -1, e.stdout or "", f"TimeoutExpired: Review exceeded {self.cli_timeout} seconds"
+            partial_stdout = e.stdout or ""
+            if isinstance(partial_stdout, bytes):
+                partial_stdout = partial_stdout.decode("utf-8", errors="replace")
+            logger.warning(
+                "Partial raw CodeRabbit results before timeout for %s:\n%s",
+                os.path.basename(os.path.abspath(repo_path)),
+                partial_stdout if partial_stdout else "<empty>",
+            )
+            return -1, partial_stdout, f"TimeoutExpired: Review exceeded {self.cli_timeout} seconds"
         except FileNotFoundError:
             logger.error("CodeRabbit CLI binary 'coderabbit' not found in PATH")
             return 127, "", "CodeRabbit CLI ('coderabbit') is not installed or not in PATH"
