@@ -175,9 +175,9 @@ class TestReviewEngine(unittest.TestCase):
         # Second call should be the rate-limit PATCH
         rate_limit_call = comment_calls[-1]
         body = rate_limit_call[0][3]
-        self.assertIn("Free Tier request quota / rate limit reached", body)
-        self.assertIn("Will retry in", body)
-        self.assertIn("Attempt**: 1 of 3", body)
+        self.assertIn("Review Temporarily Delayed", body)
+        self.assertNotIn("Attempt", body)
+        self.assertNotIn("coderabbit-bot", body)
 
     def test_strict_approval_blocks_approval_on_minor_issue(self):
         self.gh_client.get_username.return_value = "coderabbit-bot"
@@ -386,9 +386,10 @@ Review complete. Detailed findings submitted directly to this pull request."""
         self.assertEqual(logs[0].get("coderabbit_account"), "Dedicated Key Account")
         self.assertEqual(logs[0].get("account_id"), "acc-dedicated")
 
-        # Verify account was included in review_body submitted to GitHub
+        # Verify account was recorded in logs/state but excluded from review_body submitted to GitHub PR
         call_kwargs = self.gh_client.submit_pull_request_review.call_args[1]
-        self.assertIn("Dedicated Key Account", call_kwargs["body"])
+        self.assertNotIn("Dedicated Key Account", call_kwargs["body"])
+        self.assertNotIn("Execution Time", call_kwargs["body"])
 
 if __name__ == "__main__":
     unittest.main()

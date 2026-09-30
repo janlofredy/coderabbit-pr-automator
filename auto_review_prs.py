@@ -541,7 +541,6 @@ class AutoReviewEngine:
             self.state_manager.set_pr_reviewing(pr_key, False)
             logger.warning("PR %s has %d files (limit %d). Skipping review.", pr_key, file_count, max_files_limit)
             skip_comment = f"""🐰 **Automated CodeRabbit Review Skipped**
-- **Reviewer**: @{auth_user or 'coderabbit-bot'}
 - **Target Base Branch**: `{base_ref}`
 - **Head Branch**: `{head_ref}` (`{head_sha[:8]}`)
 ---
@@ -573,12 +572,10 @@ class AutoReviewEngine:
         account_id = account.get("id") if account and account.get("id") else "default"
 
         in_progress_comment = f"""🐰 **Automated CodeRabbit Review In Progress**
-- **Reviewer**: @{auth_user or 'coderabbit-bot'}
-- **CodeRabbit Account**: `{account_name}`
 - **Target Base Branch**: `{base_ref}`
 - **Head Branch**: `{head_ref}` (`{head_sha[:8]}`)
 ---
-⚡ **Status**: Running local CodeRabbit CLI review (Attempt {attempt} of 3)...
+⚡ **Status**: Running CodeRabbit review...
 """
         bot_comment = self.github_client.create_or_update_comment(owner, repo_name, pr_number, in_progress_comment)
         comment_id = bot_comment.get("id")
@@ -614,14 +611,11 @@ class AutoReviewEngine:
             self.state_manager.set_pr_reviewing(pr_key, False)
 
             rate_limit_comment = f"""🐰 **Automated CodeRabbit Review In Progress**
-- **Reviewer**: @{auth_user or 'coderabbit-bot'}
 - **Target Base Branch**: `{base_ref}`
 - **Head Branch**: `{head_ref}` (`{head_sha[:8]}`)
 ---
-### ⏳ Review Temporarily Unavailable
-> ⚠️ **{reason_msg}**
-> - **Will retry in**: **~{mins} mins** (at `{resume_time}`)
-> - **Attempt**: {attempt} of 3
+### ⏳ Review Temporarily Delayed
+> ⚠️ Automated review was temporarily delayed and will resume automatically.
 """
             self.github_client.create_or_update_comment(owner, repo_name, pr_number, rate_limit_comment, comment_id)
 
@@ -646,14 +640,10 @@ class AutoReviewEngine:
             logger.error("CodeRabbit review failed with exit code %s: %s", retcode, stderr)
             self.state_manager.set_pr_reviewing(pr_key, False)
             err_comment = f"""🐰 **Automated CodeRabbit Review Failed**
-- **Reviewer**: @{auth_user or 'coderabbit-bot'}
 - **Target Base Branch**: `{base_ref}`
 - **Head Branch**: `{head_ref}` (`{head_sha[:8]}`)
 ---
-> ❌ **Error during CodeRabbit CLI execution** (Exit code: `{retcode}`):
-```
-{stderr[:600]}
-```
+> ❌ Automated review could not be completed at this time.
 """
             self.github_client.create_or_update_comment(owner, repo_name, pr_number, err_comment, comment_id)
             status_data = {
@@ -696,12 +686,10 @@ class AutoReviewEngine:
             logger.error("%s for %s (exit=%s, status=%s)", error_message, pr_key, retcode, parsed.get("completion_status", "unknown"))
             self.state_manager.set_pr_reviewing(pr_key, False)
             failure_comment = f"""🐰 **Automated CodeRabbit Review Failed**
-- **Reviewer**: @{auth_user or 'coderabbit-bot'}
-- **CodeRabbit Account**: `{account_name}`
+- **Target Base Branch**: `{base_ref}`
 - **Head Branch**: `{head_ref}` (`{head_sha[:8]}`)
 ---
-> ❌ **Review result was incomplete or unreadable. No approval was submitted.**
-> Retry after checking the CodeRabbit CLI version and logs.
+> ❌ Review result was incomplete or unreadable. No review decision was submitted.
 """
             self.github_client.create_or_update_comment(owner, repo_name, pr_number, failure_comment, comment_id)
             status_data = {"pr_key": pr_key, "status": "ERROR", "error": error_message, "head_sha": head_sha,
@@ -838,12 +826,11 @@ class AutoReviewEngine:
         review_body = f"""## 🐰 CodeRabbit Automated Review
 
 - **Review Outcome**: `{review_outcome}`
-- **Account**: `{account_name}`
 - **Files Modified**: {file_count}
 - **Critical / Major Issues**: {critical_major_count}
 - **Minor / Warning Issues**: {minor_count}
 - **Total Findings**: {len(findings_list)}
-- **Execution Time**: {elapsed:.1f}s
+
 {summary_text}
 """
         self.state_manager.set_pr_reviewing(
@@ -888,20 +875,16 @@ class AutoReviewEngine:
             })
             self.state_manager.record_pr_status(pr_key, status_data)
             failure_comment = f"""🐰 **Automated CodeRabbit Review Failed**
-- **Reviewer**: @{auth_user or 'coderabbit-bot'}
-- **CodeRabbit Account**: `{account_name}`
+- **Target Base Branch**: `{base_ref}`
 - **Head Branch**: `{head_ref}` (`{head_sha[:8]}`)
 ---
-> ❌ **Analysis completed, but GitHub rejected the review submission.**
-> {str(e)[:500]}
+> ❌ Review submission rejected by GitHub.
 """
             self.github_client.create_or_update_comment(owner, repo_name, pr_number, failure_comment, comment_id)
             return status_data
 
         # Update bot status comment to Completed
         completed_comment = f"""🐰 **Automated CodeRabbit Review Completed**
-- **Reviewer**: @{auth_user or 'coderabbit-bot'}
-- **CodeRabbit Account**: `{account_name}`
 - **Target Base Branch**: `{base_ref}`
 - **Head Branch**: `{head_ref}` (`{head_sha[:8]}`)
 - **Status**: {review_outcome} ({critical_major_count} critical/major, {minor_count} minor findings)
