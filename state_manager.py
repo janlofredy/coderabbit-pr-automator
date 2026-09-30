@@ -357,12 +357,90 @@ class StateManager:
 
     def get_review_queue(self) -> list:
         """Retrieves the list of queued review items."""
-        state = self.load_state()
-        return list(state.get("review_queue", []))
+        with self._lock:
+            state = self.load_state()
+            return list(state.get("review_queue", []))
 
     def save_review_queue(self, queue_items: list) -> None:
         """Persists the review queue list to state storage."""
-        state = self.load_state()
-        state["review_queue"] = list(queue_items)
-        self.save_state(state)
+        with self._lock:
+            state = self.load_state()
+            state["review_queue"] = list(queue_items)
+            self.save_state(state)
+
+    def enqueue_review_job(self, job_item: Dict[str, Any], to_front: bool = False) -> bool:
+        """
+        Thread-safely adds or updates a PR job in the review queue.
+        Returns True if newly added or upgraded to force, False if already queued.
+        """
+        with self._lock:
+            state = self.load_state()
+            queue = list(state.get("review_queue", []))
+            pr_key = job_item.get("pr_key")
+
+            for existing in queue:
+                if existing.get("pr_key") == pr_key:
+                    if job_item.get("force") and not existing.get("force"):
+                        existing["force"] = True
+                        state["review_queue"] = queue
+                        self.save_state(state)
+                        return True
+                    return False
+
+            if to_front:
+                queue.insert(0, dict(job_item))
+            else:
+                queue.append(dict(job_item))
+
+            state["review_queue"] = queue
+            self.save_state(state)
+            return True
+
+    def pop_next_review_job(self) -> Optional[Dict[str, Any]]:
+        """
+        Thread-safely pops the next pending PR job from the front of the queue.
+        """
+        with self._lock:
+            state = self.load_state()
+            queue = list(state.get("review_queue", []))
+            if not queue:
+                return None
+            item = queue.pop(0)
+            state["review_queue"] = queue
+            self.save_state(state)
+            return item
+
+    def requeue_review_job(self, job_item: Dict[str, Any], to_front: bool = True) -> None:
+        """
+        Puts an unfinished job back into the review queue (e.g. on rate limit).
+        """
+        with self._lock:
+            state = self.load_state()
+            queue = list(state.get("review_queue", []))
+            pr_key = job_item.get("pr_key")
+            if not any(item.get("pr_key") == pr_key for item in queue):
+                if to_front:
+                    queue.insert(0, dict(job_item))
+                else:
+                    queue.append(dict(job_item))
+                state["review_queue"] = queue
+                self.save_state(state)
+
+    def move_review_job_to_top(self, pr_key: str) -> bool:
+        """
+        Moves the matching pr_key to the head of the queue.
+        """
+        with self._lock:
+            state = self.load_state()
+            queue = list(state.get("review_queue", []))
+            target_idx = next((i for i, item in enumerate(queue) if item.get("pr_key") == pr_key), None)
+            if target_idx is None:
+                return False
+            if target_idx == 0:
+                return True
+            item = queue.pop(target_idx)
+            queue.insert(0, item)
+            state["review_queue"] = queue
+            self.save_state(state)
+            return True
 

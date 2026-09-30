@@ -81,7 +81,8 @@ class ConfigManager:
                         "path": os.path.join(self.repos_base_dir, repo_clean)
                     })
 
-        poll_interval = safe_int_env("POLL_INTERVAL_SECONDS", 900)
+        repo_poll_interval = safe_int_env("REPO_POLL_INTERVAL_SECONDS", safe_int_env("POLL_INTERVAL_SECONDS", 900))
+        review_poll_interval = safe_int_env("REVIEW_POLL_INTERVAL_SECONDS", 10)
         max_files = safe_int_env("MAX_FILES_LIMIT", 100)
         auto_approve_val = os.getenv("AUTO_APPROVE", "true")
         auto_approve_env = str(auto_approve_val).lower() in ("true", "1", "yes") if auto_approve_val else True
@@ -90,7 +91,9 @@ class ConfigManager:
         return {
             "repositories": repo_list,
             "coderabbit_accounts": [],
-            "poll_interval_seconds": poll_interval,
+            "poll_interval_seconds": repo_poll_interval,
+            "repo_poll_interval_seconds": repo_poll_interval,
+            "review_poll_interval_seconds": review_poll_interval,
             "max_files_limit": max_files,
             "auto_approve": auto_approve_env,
             "strict_approval": strict_approval_env,
@@ -218,11 +221,25 @@ class ConfigManager:
         self.save_config(cfg)
         return cfg["strict_approval"]
 
+    def get_repo_poll_interval(self) -> int:
+        """Returns the interval in seconds between repository discovery scans."""
+        cfg = self.load_config()
+        return int(cfg.get("repo_poll_interval_seconds", cfg.get("poll_interval_seconds", 60)))
+
+    def get_review_poll_interval(self) -> int:
+        """Returns the interval in seconds for review queue checking when idle."""
+        cfg = self.load_config()
+        return int(cfg.get("review_poll_interval_seconds", 10))
+
     def get_settings(self) -> Dict[str, Any]:
         """Returns runtime service configuration settings."""
         cfg = self.load_config()
+        repo_poll = int(cfg.get("repo_poll_interval_seconds", cfg.get("poll_interval_seconds", 60)))
+        review_poll = int(cfg.get("review_poll_interval_seconds", 10))
         return {
-            "poll_interval_seconds": int(cfg.get("poll_interval_seconds", 900)),
+            "poll_interval_seconds": repo_poll,
+            "repo_poll_interval_seconds": repo_poll,
+            "review_poll_interval_seconds": review_poll,
             "max_files_limit": int(cfg.get("max_files_limit", 100)),
             "auto_approve": bool(cfg.get("auto_approve", True)),
             "strict_approval": bool(cfg.get("strict_approval", True)),
@@ -233,11 +250,21 @@ class ConfigManager:
     def update_settings(self, updates: Dict[str, Any]) -> Dict[str, Any]:
         """Atomically updates operational settings in config.json."""
         cfg = self.load_config()
-        if "poll_interval_seconds" in updates:
+        if "repo_poll_interval_seconds" in updates or "poll_interval_seconds" in updates:
+            raw_val = updates.get("repo_poll_interval_seconds", updates.get("poll_interval_seconds"))
             try:
-                val = int(updates["poll_interval_seconds"])
-                if val >= 10:
+                val = int(raw_val)
+                if val >= 5:
+                    cfg["repo_poll_interval_seconds"] = val
                     cfg["poll_interval_seconds"] = val
+            except (ValueError, TypeError):
+                pass
+
+        if "review_poll_interval_seconds" in updates:
+            try:
+                val = int(updates["review_poll_interval_seconds"])
+                if val >= 1:
+                    cfg["review_poll_interval_seconds"] = val
             except (ValueError, TypeError):
                 pass
 

@@ -10,30 +10,37 @@ from typing import Any, Dict, List, Optional
 from auto_review_prs import AutoReviewEngine
 from config_manager import ConfigManager
 from github_client import GitHubClient
-from repository_management import RepositoryManagementService
 from state_manager import StateManager
 
 logger = logging.getLogger("review_management")
 
 
 class ReviewManagementService:
-    """Owns scan scheduling, selected-PR runs, and review-engine execution."""
+    """Owns review queue processing and review-engine execution independently from repository cache."""
 
     def __init__(
         self,
         config_manager: ConfigManager,
         state_manager: StateManager,
         github_client: GitHubClient,
-        repository_service: RepositoryManagementService,
-        review_engine: AutoReviewEngine,
-        executor: ThreadPoolExecutor,
+        review_engine_or_repo_service: Any,
+        review_engine: Optional[AutoReviewEngine] = None,
+        executor: Optional[ThreadPoolExecutor] = None,
     ):
         self.config_manager = config_manager
         self.state_manager = state_manager
         self.github_client = github_client
-        self.repository_service = repository_service
-        self.review_engine = review_engine
-        self._executor = executor
+
+        # Support both new signature (without repository_service) and old signature
+        if review_engine is not None:
+            # Old signature: (config_mgr, state_mgr, gh_client, repo_service, review_engine, executor)
+            self.review_engine = review_engine
+            self._executor = executor or ThreadPoolExecutor(max_workers=5)
+        else:
+            # New signature: (config_mgr, state_mgr, gh_client, review_engine, executor)
+            self.review_engine = review_engine_or_repo_service
+            self._executor = executor if isinstance(executor, ThreadPoolExecutor) else ThreadPoolExecutor(max_workers=5)
+
         self._scan_lock = threading.Lock()
         self._scan_in_progress = False
         self._scan_phase = "IDLE"
@@ -118,20 +125,31 @@ class ReviewManagementService:
 
             was_rate_limited = False
             try:
-                self.repository_service.refresh_pr_cache()
-                target = self.repository_service.find_cached_pr(item["pr_key"])
-                if not target:
-                    item["error"] = "Pull request is no longer open or available."
+                repo_name_full = item.get("repo")
+                pr_num = item.get("number")
+                if not repo_name_full or not pr_num:
+                    if "#" in item["pr_key"]:
+                        parts = item["pr_key"].split("#")
+                        repo_name_full = parts[0]
+                        pr_num = int(parts[1]) if parts[1].isdigit() else 0
+
+                if not repo_name_full or not pr_num:
+                    item["error"] = f"Invalid PR job format: {item.get('pr_key')}"
                     continue
+
                 repo_info = next(
-                    (repo for repo in self.config_manager.get_repos() if repo["full_name"] == target["repo"]),
+                    (repo for repo in self.config_manager.get_repos() if repo["full_name"].lower() == repo_name_full.lower()),
                     None,
                 )
                 if not repo_info:
-                    item["error"] = "Repository is no longer configured."
+                    item["error"] = f"Repository '{repo_name_full}' is no longer configured."
                     continue
-                owner, repo_name = GitHubClient.split_repo(target["repo"])
-                full_pr = self.github_client.get_pr(owner, repo_name, target["number"])
+
+                owner, repo_name = GitHubClient.split_repo(repo_name_full)
+                full_pr = self.github_client.get_pr(owner, repo_name, pr_num)
+                if not full_pr or full_pr.get("state") != "open":
+                    item["error"] = "Pull request is closed or not available."
+                    continue
 
                 # Try available accounts with automatic failover
                 accounts = self.config_manager.get_coderabbit_accounts()
@@ -170,8 +188,11 @@ class ReviewManagementService:
                             self._sync_queue_to_state_locked()
                     self._active_queue_item = None
 
-    def enqueue_pr(self, pr_key: str, force: bool = False, to_front: bool = False) -> bool:
+    def enqueue_pr(self, pr_key: str, force: bool = False, to_front: bool = False, repo: Optional[str] = None, number: Optional[int] = None, head_sha: Optional[str] = None) -> bool:
         """Adds a PR to the queue if not already queued or actively reviewing (unless updating force)."""
+        repo_name = repo or (pr_key.split("#")[0] if "#" in pr_key else "")
+        pr_number = number or (int(pr_key.split("#")[1]) if "#" in pr_key and pr_key.split("#")[1].isdigit() else 0)
+
         with self._scan_lock:
             existing = next((queued for queued in self._review_queue if queued["pr_key"] == pr_key), None)
             if existing:
@@ -187,6 +208,9 @@ class ReviewManagementService:
 
             item = {
                 "pr_key": pr_key,
+                "repo": repo_name,
+                "number": pr_number,
+                "head_sha": head_sha or "",
                 "force": bool(force),
                 "queued_at": datetime.now(timezone.utc).isoformat(),
             }
@@ -219,7 +243,7 @@ class ReviewManagementService:
             self._start_queue_worker_locked()
             return True
 
-    def scan_and_enqueue_pending(self, force: bool = False) -> int:
+    def scan_and_enqueue_pending(self, force: bool = False, repo_service=None) -> int:
         """
         Discovers open pull requests across all enabled repositories,
         identifies those that are pending review, and enqueues them.
@@ -228,65 +252,31 @@ class ReviewManagementService:
             logger.info("Review service is currently disabled in config.")
             return 0
 
-        cached_prs = self.repository_service.refresh_pr_cache()
-        pr_statuses = self.state_manager.get_all_pr_statuses()
-        auth_user = self.github_client.get_username()
-        enqueued_count = 0
+        # Sync queue from state in case external producers added items
+        self._init_queue_from_state()
 
-        for pr in cached_prs:
-            pr_key = pr["pr_key"]
-            status_entry = pr_statuses.get(pr_key, {})
-            status_name = status_entry.get("status")
+        service = repo_service or getattr(self, "repository_service", None)
+        if not service:
+            # If no repo service is attached, start queue worker on existing queue
+            with self._scan_lock:
+                self._start_queue_worker_locked()
+            return 0
 
-            # Check eligibility:
-            # 1. Skip if own PR (author matches auth_user) unless force
-            if pr.get("is_own_pr", False) and not force:
-                continue
-
-            # 2. Skip if already reviewed on current commit SHA unless force
-            head_sha = pr.get("head_sha", "")
-            if status_name == "ALREADY_REVIEWED" and status_entry.get("head_sha") == head_sha and not force:
-                continue
-            if status_name == "COMPLETED" and status_entry.get("head_sha") == head_sha and not force:
-                continue
-            if pr.get("has_user_auto_approved") and not force:
-                continue
-
-            # 3. Skip if max file limit exceeded on current head unless force
-            if status_name == "SKIPPED_MAX_FILES" and status_entry.get("head_sha") == head_sha and not force:
-                continue
-
-            # Enqueue eligible pending PR
-            if self.enqueue_pr(pr_key, force=force):
-                enqueued_count += 1
-
-        self.state_manager.record_last_run()
+        enqueued_count = service.discover_and_enqueue_pending(self.state_manager, force=force)
+        self._init_queue_from_state()
+        with self._scan_lock:
+            self._start_queue_worker_locked()
         return enqueued_count
 
-    def run_review_scan(self, force: bool = False, pr_key: Optional[str] = None) -> bool:
-        """Queue a selected PR or scan for pending PRs and enqueue them."""
+    def run_review_scan(self, force: bool = False, pr_key: Optional[str] = None, repo_service=None) -> bool:
+        """Queue a selected PR or trigger queue drain."""
         if pr_key:
             return self.enqueue_pr(pr_key, force=force)
 
+        # Trigger processing of queue
         with self._scan_lock:
-            # If a queue worker is running, we can still discover and enqueue PRs in background
-            if self._scan_in_progress and self._scan_phase != "PROCESSING_REVIEW_QUEUE":
-                logger.info("Scan already in progress. Skipping.")
-                return False
-
-        def task():
-            try:
-                self.scan_and_enqueue_pending(force=force)
-            except Exception as e:
-                logger.error("Error scanning and enqueuing pending PRs: %s", e)
-            finally:
-                with self._scan_lock:
-                    self._start_queue_worker_locked()
-
-        try:
-            self._executor.submit(task)
-        except Exception:
-            raise
+            self._init_queue_from_state()
+            self._start_queue_worker_locked()
         return True
 
     def clear_rate_limit(self) -> None:

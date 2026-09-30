@@ -3,6 +3,7 @@ import shutil
 import tempfile
 import unittest
 import json
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock
 
 from config_manager import ConfigManager
@@ -48,6 +49,15 @@ class TestDashboardBackend(unittest.TestCase):
             }
         ]
         self.gh_client.has_user_reviewed_sha.return_value = (False, None)
+        self.gh_client.get_pr.return_value = {
+            "number": 101,
+            "title": "Add awesome feature",
+            "state": "open",
+            "user": {"login": "contributor_jane"},
+            "base": {"ref": "main"},
+            "head": {"ref": "feature-awesome", "sha": "abcdef1234567890"},
+            "html_url": "https://github.com/owner/repo1/pull/101",
+        }
         self.gh_client.get_pr_review_summary.return_value = {
             "has_other_changes_requested": False,
             "other_changes_requested_by": [],
@@ -339,11 +349,13 @@ class TestDashboardBackend(unittest.TestCase):
         self.assertEqual(queue_state["pending"][0]["pr_key"], "owner/repo1#101")
 
         # Now enqueue or force a PR
-        review_service.enqueue_pr("owner/repo1#101", force=True)
-        # With force=True, worker can proceed
         with unittest.mock.patch.object(self.backend.review_engine, "review_single_pr") as mock_review:
             mock_review.return_value = {"status": "COMPLETED"}
-            review_service._drain_review_queue()
+            review_service.enqueue_pr("owner/repo1#101", force=True)
+            # Ensure background thread has finished or drain directly
+            self.backend._executor.shutdown(wait=True)
+            self.backend._executor = ThreadPoolExecutor(max_workers=5)
+            self.backend.review_service._executor = self.backend._executor
             mock_review.assert_called_once()
 
     def test_rate_limited_pr_put_back_to_first_of_queue(self):
@@ -370,11 +382,13 @@ class TestDashboardBackend(unittest.TestCase):
 
     def test_scan_and_enqueue_pending(self):
         review_service = self.backend.review_service
+        repo_service = self.backend.repository_service
         # Pause queue worker so item remains in pending queue to inspect
         with unittest.mock.patch.object(self.backend.review_engine, "review_single_pr"):
             with unittest.mock.patch.object(review_service, "_start_queue_worker_locked"):
-                enqueued = review_service.scan_and_enqueue_pending(force=False)
+                enqueued = repo_service.discover_and_enqueue_pending(self.state_mgr, force=False)
                 self.assertEqual(enqueued, 1)
+                review_service._init_queue_from_state()
                 queue_state = review_service.get_review_queue()
                 self.assertTrue(any(item["pr_key"] == "owner/repo1#101" for item in queue_state["pending"]))
 
@@ -428,6 +442,63 @@ class TestDashboardBackend(unittest.TestCase):
             res = self.backend.test_coderabbit_account_auth(acc)
             self.assertTrue(res["authenticated"])
             self.assertEqual(res["status"], "authenticated")
+
+    def test_decoupled_queue_review_execution(self):
+        """Verify that ReviewManagementService drains the queue using only the queue job without repo service cache."""
+        review_service = self.backend.review_service
+        # Enqueue a self-contained PR job
+        job = {
+            "pr_key": "owner/repo1#101",
+            "repo": "owner/repo1",
+            "number": 101,
+            "head_sha": "abcdef1234567890",
+            "force": True,
+            "queued_at": "2026-09-30T10:00:00Z"
+        }
+        self.state_mgr.enqueue_review_job(job)
+        review_service._init_queue_from_state()
+
+        # Clear repo cache completely to ensure consumer does not rely on it
+        self.backend.repository_service._cached_prs = []
+
+        with unittest.mock.patch.object(self.backend.review_engine, "review_single_pr") as mock_review:
+            mock_review.return_value = {"status": "COMPLETED"}
+            review_service._drain_review_queue()
+            mock_review.assert_called_once()
+            # Verify passed repo_info and full_pr
+            call_repo_info, call_pr = mock_review.call_args[0][0], mock_review.call_args[0][1]
+            self.assertEqual(call_repo_info["full_name"], "owner/repo1")
+            self.assertEqual(call_pr["number"], 101)
+
+    def test_status_badge_github_commented_review(self):
+        """Verify that when GitHub has a COMMENT review by the bot, the badge reflects COMMENTS_POSTED instead of PENDING_REVIEW."""
+        self.gh_client.get_pr_review_summary.return_value = {
+            "has_other_changes_requested": False,
+            "other_changes_requested_by": [],
+            "other_approved_by": [],
+            "other_commented_by": [],
+            "has_other_commented": False,
+            "has_user_auto_approved": False,
+            "has_user_manually_approved": False,
+            "has_check_error": False,
+            "failed_checks": [],
+            "has_user_reviewed": True,
+            "user_review_state": "COMMENTED"
+        }
+        self.backend.refresh_pr_cache()
+        status = self.backend.get_annotated_status()
+        pr = status["pull_requests"][0]
+        self.assertEqual(pr["status_badge"], "COMMENTS_POSTED")
+        self.assertEqual(pr["status_label"], "Comments Posted")
+
+    def test_status_badge_queued(self):
+        """Verify that when a PR is in the review queue, its badge shows QUEUED instead of PENDING_REVIEW."""
+        self.state_mgr.enqueue_review_job({"pr_key": "owner/repo1#101", "force": False})
+        self.backend.refresh_pr_cache()
+        status = self.backend.get_annotated_status()
+        pr = status["pull_requests"][0]
+        self.assertEqual(pr["status_badge"], "QUEUED")
+        self.assertEqual(pr["status_label"], "Queued for Review")
 
 if __name__ == "__main__":
     unittest.main()

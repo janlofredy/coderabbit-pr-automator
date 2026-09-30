@@ -361,6 +361,18 @@ class GitHubClient:
                         if commit_matched:
                             has_user_reviewed = True
                             user_review_state = "CHANGES_REQUESTED"
+                    elif state == "COMMENTED":
+                        if commit_matched:
+                            has_user_reviewed = True
+                            outcome = "COMMENTED"
+                            if "NEEDS_WORK" in body:
+                                outcome = "NEEDS_WORK (Minor Issues Detected)"
+                            elif "CHANGES_REQUESTED" in body:
+                                outcome = "CHANGES_REQUESTED"
+                            elif "APPROVED" in body:
+                                outcome = "APPROVED"
+                                user_auto_approved = True
+                            user_review_state = outcome
                 else:
                     if state == "CHANGES_REQUESTED":
                         other_changes_requested.append(reviewer_login)

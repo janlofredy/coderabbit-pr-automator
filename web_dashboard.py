@@ -58,7 +58,6 @@ class DashboardBackend:
             self.config_manager,
             self.state_manager,
             self.github_client,
-            self.repository_service,
             self.review_engine,
             executor=self._executor,
         )
@@ -66,11 +65,14 @@ class DashboardBackend:
         self._auth_lock = threading.Lock()
         self._auth_status_cache = {"status": "checking", "checked_at": 0}
 
-        # Start continuous background worker
-        self._worker_thread = None
+        # Start independent background worker threads
+        self._repo_worker_thread = None
+        self._review_worker_thread = None
         if auto_start_worker:
-            self._worker_thread = threading.Thread(target=self._background_loop, daemon=True)
-            self._worker_thread.start()
+            self._repo_worker_thread = threading.Thread(target=self._repo_polling_loop, daemon=True)
+            self._review_worker_thread = threading.Thread(target=self._review_worker_loop, daemon=True)
+            self._repo_worker_thread.start()
+            self._review_worker_thread.start()
 
     def fetch_repo_prs(self, repo_info: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Compatibility facade; repository discovery lives in its service."""
@@ -80,28 +82,66 @@ class DashboardBackend:
         """Compatibility facade; repository cache management lives in its service."""
         self.repository_service.refresh_pr_cache()
 
-    def _background_loop(self) -> None:
-        """Background daemon polling repositories and auto-reviewing."""
-        logger.info("Background review daemon started.")
+    def _repo_polling_loop(self) -> None:
+        """Independent daemon polling repositories, refreshing PR cache, and enqueuing jobs."""
+        logger.info("Repository polling daemon started.")
         # Initial refresh
         self.refresh_pr_cache()
 
         while self._is_running:
-            config = self.config_manager.load_config()
-            interval = config.get("poll_interval_seconds", 900)
+            interval = self.config_manager.get_repo_poll_interval()
+            if self.config_manager.is_service_enabled():
+                try:
+                    self.repository_service.discover_and_enqueue_pending(self.state_manager, force=False)
+                    # Notify review service to check queue
+                    self.review_service._init_queue_from_state()
+                    with self.review_service._scan_lock:
+                        self.review_service._start_queue_worker_locked()
+                except Exception as e:
+                    logger.error("Error in repository polling loop: %s", e)
 
-            if config.get("service_enabled", True):
-                self.run_review_scan(force=False)
-
-            # Sleep in short increments to allow rapid reaction to triggers
+            # Sleep in short increments for responsive shutdown
             for _ in range(max(1, interval // 5)):
                 if not self._is_running:
                     break
                 time.sleep(5)
 
+    def _review_worker_loop(self) -> None:
+        """Independent daemon draining the review queue at review_poll_interval."""
+        logger.info("Review queue consumer daemon started.")
+        while self._is_running:
+            interval = self.config_manager.get_review_poll_interval()
+            if self.config_manager.is_service_enabled():
+                try:
+                    self.review_service._init_queue_from_state()
+                    with self.review_service._scan_lock:
+                        self.review_service._start_queue_worker_locked()
+                except Exception as e:
+                    logger.error("Error in review worker loop: %s", e)
+
+            for _ in range(max(1, interval // 2)):
+                if not self._is_running:
+                    break
+                time.sleep(2)
+
     def run_review_scan(self, force: bool = False, pr_key: Optional[str] = None) -> bool:
-        """Compatibility facade; review scheduling lives in its service."""
-        return self.review_service.run_review_scan(force=force, pr_key=pr_key)
+        """Compatibility facade; triggers PR review or repository scan."""
+        if pr_key:
+            return self.review_service.enqueue_pr(pr_key, force=force)
+
+        # Trigger repo discovery & enqueue, then wake up review worker
+        def task():
+            try:
+                self.repository_service.discover_and_enqueue_pending(self.state_manager, force=force)
+            except Exception as e:
+                logger.error("Error during manual repository scan: %s", e)
+            finally:
+                self.review_service._init_queue_from_state()
+                with self.review_service._scan_lock:
+                    self.review_service._start_queue_worker_locked()
+
+        self._executor.submit(task)
+        return True
 
     def test_coderabbit_account_auth(self, account: Dict[str, Any]) -> Dict[str, Any]:
         """Runs coderabbit auth status or a test review probe for a specific account."""
@@ -199,6 +239,8 @@ class DashboardBackend:
 
         annotated_prs = []
         cached_list = self.repository_service.get_cached_prs()
+        review_queue = state.get("review_queue", [])
+        queued_keys = {q.get("pr_key") for q in review_queue if isinstance(q, dict)}
 
         for pr in cached_list:
             item = dict(pr)
@@ -209,7 +251,15 @@ class DashboardBackend:
             other_changers = item.get("other_changes_requested_by", [])
             changers_str = ", ".join(other_changers) if other_changers else "Reviewer"
 
-            is_auto_approved = item.get("has_user_auto_approved", False) or status_entry.get("review_outcome") == "APPROVED" or (status_entry.get("review_state") == "APPROVED" and "CodeRabbit" in str(status_entry.get("review_body", "")))
+            gh_review_state = item.get("user_review_state")
+            has_gh_review = item.get("has_user_reviewed", False)
+
+            is_auto_approved = (
+                item.get("has_user_auto_approved", False)
+                or status_entry.get("review_outcome") == "APPROVED"
+                or (status_entry.get("review_state") == "APPROVED" and "CodeRabbit" in str(status_entry.get("review_body", "")))
+                or (gh_review_state == "APPROVED" and item.get("has_user_auto_approved", False))
+            )
             is_manual_approved = item.get("has_user_manually_approved", False)
 
             # Determine dynamic status badge
@@ -266,11 +316,16 @@ class DashboardBackend:
                 item["status_badge"] = "MANUALLY_APPROVED"
                 item["status_label"] = "Manually Approved by You"
                 item["status_description"] = "You have approved this pull request manually."
-            elif status_entry.get("review_outcome") == "NEEDS_WORK (Minor Issues Detected)":
+            elif status_entry.get("review_outcome") == "NEEDS_WORK (Minor Issues Detected)" or gh_review_state == "NEEDS_WORK (Minor Issues Detected)":
                 item["status_badge"] = "COMMENTS_POSTED"
                 item["status_label"] = "Needs Work (Minor Issues)"
                 item["status_description"] = "The review found minor issues and posted comments instead of approving."
-            elif status_entry.get("status") == "COMPLETED" or status_entry.get("review_state") == "CHANGES_REQUESTED":
+            elif (
+                status_entry.get("status") == "COMPLETED"
+                or status_entry.get("review_state") == "CHANGES_REQUESTED"
+                or gh_review_state in ("CHANGES_REQUESTED", "COMMENTED")
+                or (has_gh_review and gh_review_state is not None)
+            ):
                 item["status_badge"] = "COMMENTS_POSTED"
                 item["status_label"] = "Comments Posted"
                 item["status_description"] = "The review completed and posted findings or comments to this pull request."
@@ -278,6 +333,10 @@ class DashboardBackend:
                 item["status_badge"] = "OWN_PR"
                 item["status_label"] = "Your PR (Author)"
                 item["status_description"] = "This pull request belongs to the authenticated account; automatic approval is disabled for your own PR."
+            elif key in queued_keys:
+                item["status_badge"] = "QUEUED"
+                item["status_label"] = "Queued for Review"
+                item["status_description"] = "In the review queue. The review worker will process this pull request shortly."
             else:
                 item["status_badge"] = "PENDING_REVIEW"
                 item["status_label"] = "Pending Review"

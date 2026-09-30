@@ -1191,15 +1191,26 @@
                 </div>
 
                 <div>
-                    <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem;">Polling Interval (Seconds)</label>
+                    <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem;">Repository Scan Interval (Seconds)</label>
                     <div style="display: flex; gap: 0.5rem; align-items: center;">
-                        <input type="number" id="setting-poll-interval" class="form-input" min="30" step="30" style="max-width: 140px;">
+                        <input type="number" id="setting-poll-interval" class="form-input" min="10" step="10" style="max-width: 140px;">
+                        <button type="button" class="btn btn-sm" onclick="setPollPreset(60)">1m</button>
                         <button type="button" class="btn btn-sm" onclick="setPollPreset(300)">5m</button>
                         <button type="button" class="btn btn-sm" onclick="setPollPreset(900)">15m</button>
                         <button type="button" class="btn btn-sm" onclick="setPollPreset(1800)">30m</button>
-                        <button type="button" class="btn btn-sm" onclick="setPollPreset(3600)">1h</button>
                     </div>
-                    <small style="color: var(--text-muted); font-size: 0.75rem;">Time between automatic scans of open pull requests.</small>
+                    <small style="color: var(--text-muted); font-size: 0.75rem;">Time between repository scans for new/updated pull requests.</small>
+                </div>
+
+                <div>
+                    <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem;">Review Queue Worker Poll (Seconds)</label>
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <input type="number" id="setting-review-poll-interval" class="form-input" min="2" max="300" step="5" style="max-width: 140px;">
+                        <button type="button" class="btn btn-sm" onclick="setReviewPollPreset(5)">5s</button>
+                        <button type="button" class="btn btn-sm" onclick="setReviewPollPreset(10)">10s</button>
+                        <button type="button" class="btn btn-sm" onclick="setReviewPollPreset(30)">30s</button>
+                    </div>
+                    <small style="color: var(--text-muted); font-size: 0.75rem;">How frequently the review worker checks the queue when idle.</small>
                 </div>
 
                 <div>
@@ -1582,6 +1593,19 @@
             // Priority 5: Approved
             if (pr.has_user_auto_approved || pr.status_badge === 'APPROVED' || pr.bot_review_outcome === 'APPROVED') {
                 return { class: 'badge-green', text: '🤖 Bot Approved' };
+            }
+            if (pr.has_user_manually_approved || pr.status_badge === 'MANUALLY_APPROVED') {
+                return { class: 'badge-green', text: '👤 Manually Approved' };
+            }
+            // Priority 5b: Comments Posted / Already Reviewed
+            if (pr.status_badge === 'COMMENTS_POSTED' || pr.bot_review_outcome === 'COMMENTED' || pr.bot_review_outcome === 'NEEDS_WORK (Minor Issues Detected)') {
+                return { class: 'badge-blue', text: '💬 Comments Posted' };
+            }
+            if (pr.status_badge === 'ALREADY_REVIEWED') {
+                return { class: 'badge-gray', text: '✔️ Already Reviewed' };
+            }
+            if (pr.is_own_pr || pr.status_badge === 'OWN_PR') {
+                return { class: 'badge-gray', text: '👤 Your PR (Author)' };
             }
             // Priority 6: Failed / Skipped
             if (pr.status_badge === 'REVIEW_FAILED') {
@@ -2289,21 +2313,26 @@
             document.getElementById('github-token-state').textContent = cfg.github_token_configured
                 ? 'A token is saved in persistent app storage. Leave blank to keep it or enter a replacement.'
                 : 'No token is saved. Enter a GitHub token with repository access.';
-            document.getElementById('setting-poll-interval').value = cfg.poll_interval_seconds || 900;
+            document.getElementById('setting-poll-interval').value = cfg.repo_poll_interval_seconds || cfg.poll_interval_seconds || 60;
+            document.getElementById('setting-review-poll-interval').value = cfg.review_poll_interval_seconds || 10;
             document.getElementById('setting-max-files').value = cfg.max_files_limit || 100;
             document.getElementById('setting-auto-approve').checked = (cfg.auto_approve !== false);
             document.getElementById('setting-strict-approval').checked = (cfg.strict_approval !== false);
-            
         }
 
         function setPollPreset(seconds) {
             document.getElementById('setting-poll-interval').value = seconds;
         }
 
+        function setReviewPollPreset(seconds) {
+            document.getElementById('setting-review-poll-interval').value = seconds;
+        }
+
         async function saveSettings() {
             const msgEl = document.getElementById('settings-modal-msg');
             const saveBtn = document.querySelector('#settings-modal .modal-header ~ div button.btn-primary');
             const pollInterval = parseInt(document.getElementById('setting-poll-interval').value, 10);
+            const reviewPollInterval = parseInt(document.getElementById('setting-review-poll-interval').value, 10);
             const maxFiles = parseInt(document.getElementById('setting-max-files').value, 10);
             const autoApprove = document.getElementById('setting-auto-approve').checked;
             const strictApproval = document.getElementById('setting-strict-approval').checked;
@@ -2316,10 +2345,16 @@
                 return;
             }
 
-            if (isNaN(pollInterval) || pollInterval < 10) {
+            if (isNaN(pollInterval) || pollInterval < 5) {
                 msgEl.style.color = '#ef4444';
-                msgEl.textContent = 'Poll interval must be at least 10 seconds.';
-                showToast('Poll interval must be at least 10 seconds.', 'warning');
+                msgEl.textContent = 'Repository scan interval must be at least 5 seconds.';
+                showToast('Repository scan interval must be at least 5 seconds.', 'warning');
+                return;
+            }
+            if (isNaN(reviewPollInterval) || reviewPollInterval < 1) {
+                msgEl.style.color = '#ef4444';
+                msgEl.textContent = 'Review queue worker poll must be at least 1 second.';
+                showToast('Review queue worker poll must be at least 1 second.', 'warning');
                 return;
             }
             if (isNaN(maxFiles) || maxFiles < 1) {
@@ -2331,6 +2366,8 @@
 
             const payload = {
                 poll_interval_seconds: pollInterval,
+                repo_poll_interval_seconds: pollInterval,
+                review_poll_interval_seconds: reviewPollInterval,
                 max_files_limit: maxFiles,
                 auto_approve: autoApprove,
                 strict_approval: strictApproval,
