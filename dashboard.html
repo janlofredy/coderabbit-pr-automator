@@ -336,17 +336,88 @@
         }
 
         .review-queue-panel {
-            margin: 0 0 2rem;
-            padding: 1rem 1.25rem;
+            width: 100%;
+            margin-bottom: 2rem;
+            padding: 0.85rem 1.25rem;
             background: var(--surface-color);
             border: 1px solid var(--border-color);
             border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
         }
-        .review-queue-header { display: flex; align-items: baseline; gap: 0.65rem; margin: 0 0 0.8rem; }
-        .review-queue-header h2 { margin: 0; font-size: 1.05rem; }
-        .review-queue-list { display: grid; gap: 0.5rem; }
-        .review-queue-item { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.45rem; padding: 0.65rem 0.75rem; background: var(--bg-color); border-radius: 6px; }
-        .review-queue-empty { color: var(--text-muted); font-size: 0.9rem; }
+        .review-queue-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+            margin-bottom: 0.65rem;
+        }
+        .review-queue-title-wrap {
+            display: flex;
+            align-items: center;
+            gap: 0.65rem;
+        }
+        .review-queue-header h2 {
+            margin: 0;
+            font-size: 0.95rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            color: var(--text-main);
+        }
+        .review-queue-list {
+            display: flex;
+            gap: 0.65rem;
+            overflow-x: auto;
+            padding-bottom: 0.35rem;
+            align-items: stretch;
+            scrollbar-width: thin;
+            scrollbar-color: var(--border-color) transparent;
+        }
+        .review-queue-list::-webkit-scrollbar {
+            height: 6px;
+        }
+        .review-queue-list::-webkit-scrollbar-thumb {
+            background: var(--border-color);
+            border-radius: 3px;
+        }
+        .review-queue-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.55rem;
+            padding: 0.45rem 0.75rem;
+            background: var(--bg-color);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            font-size: 0.82rem;
+            white-space: nowrap;
+            flex-shrink: 0;
+            transition: border-color 0.15s, background-color 0.15s;
+        }
+        .review-queue-item:hover {
+            border-color: #4b5563;
+            background: #151d2c;
+        }
+        .review-queue-item.active {
+            border-color: #3b82f6;
+            background: #172554;
+        }
+        .review-queue-item strong {
+            color: var(--text-main);
+            font-size: 0.82rem;
+            font-weight: 600;
+        }
+        .review-queue-item-title {
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            max-width: 260px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .review-queue-empty {
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            padding: 0.25rem 0;
+        }
 
         .pr-card {
             background-color: var(--surface-color);
@@ -579,13 +650,16 @@
 
     <section class="review-queue-panel" aria-labelledby="review-queue-title">
         <div class="review-queue-header">
-            <h2 id="review-queue-title">Review Queue</h2>
-            <span id="review-queue-count" class="badge badge-gray">0 queued</span>
+            <div class="review-queue-title-wrap">
+                <h2 id="review-queue-title">Review Queue</h2>
+                <span id="review-queue-count" class="badge badge-gray">0 queued</span>
+            </div>
         </div>
         <div id="review-queue-list" class="review-queue-list">
             <div class="review-queue-empty">No pull requests are waiting for review.</div>
         </div>
     </section>
+
 
     <main>
         <div class="stats-bar">
@@ -918,12 +992,22 @@
             const prsByKey = new Map(prs.map(pr => [pr.pr_key, pr]));
             list.innerHTML = items.map((item, index) => {
                 const pr = prsByKey.get(item.pr_key) || {};
-                const state = index === 0 && active.length ? 'Review in progress' : 'Waiting';
-                const title = pr.title ? ` — ${escapeHtml(pr.title)}` : '';
+                const isOngoing = index === 0 && active.length > 0;
+                const state = isOngoing ? '⚡ In Progress' : `#${index + (active.length ? 0 : 1)}`;
                 const repoNum = pr.repo && pr.number ? `${escapeHtml(pr.repo)} #${pr.number}` : escapeHtml(item.pr_key);
-                return `<div class="review-queue-item"><span class="badge ${state === 'Review in progress' ? 'badge-blue' : 'badge-gray'}">${state}</span><strong>${repoNum}</strong><span>${title}</span>${item.force ? '<span class="badge badge-orange">Force</span>' : ''}</div>`;
+                const titleAttr = pr.title ? ` title="${escapeHtml(pr.title)}"` : '';
+                const detailsUrl = `/pr-details?pr_key=${encodeURIComponent(item.pr_key)}`;
+                return `<div class="review-queue-item ${isOngoing ? 'active' : ''}">` +
+                    `<span class="badge ${isOngoing ? 'badge-blue' : 'badge-gray'}">${state}</span>` +
+                    `<a href="${detailsUrl}" style="color:inherit; text-decoration:none; display:inline-flex; align-items:center; gap:0.4rem;">` +
+                    `<strong>${repoNum}</strong>` +
+                    (pr.title ? `<span class="review-queue-item-title"${titleAttr}>${escapeHtml(pr.title)}</span>` : '') +
+                    `</a>` +
+                    (item.force ? '<span class="badge badge-orange" style="font-size:0.7rem; padding:1px 5px;">Force</span>' : '') +
+                    `</div>`;
             }).join('');
         }
+
 
         function getBotReviewStatus(pr, isQueued = false, isOngoing = false) {
             // Priority 1: Ongoing Review
