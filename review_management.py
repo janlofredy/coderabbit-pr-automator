@@ -39,6 +39,23 @@ class ReviewManagementService:
         self._scan_phase = "IDLE"
         self._review_queue = deque()
         self._active_queue_item = None
+        self._init_queue_from_state()
+
+    def _init_queue_from_state(self) -> None:
+        try:
+            persisted = self.state_manager.get_review_queue()
+            for item in persisted:
+                if isinstance(item, dict) and "pr_key" in item:
+                    self._review_queue.append(dict(item))
+        except Exception as e:
+            logger.warning("Could not restore persisted review queue: %s", e)
+
+    def _sync_queue_to_state_locked(self) -> None:
+        try:
+            items = [dict(item) for item in self._review_queue]
+            self.state_manager.save_review_queue(items)
+        except Exception as e:
+            logger.warning("Could not persist review queue: %s", e)
 
     @property
     def scan_in_progress(self) -> bool:
@@ -82,10 +99,24 @@ class ReviewManagementService:
                     self._scan_in_progress = False
                     self._scan_phase = "IDLE"
                     return
+
+                is_rl, remaining, reason = self.state_manager.is_rate_limit_active()
+                if is_rl:
+                    # Rate limited: only proceed if the head item is forced
+                    next_item = self._review_queue[0]
+                    if not next_item.get("force"):
+                        logger.info("Review queue paused: rate limit active (%ds remaining, reason: %s).", remaining, reason)
+                        self._active_queue_item = None
+                        self._scan_in_progress = False
+                        self._scan_phase = "RATE_LIMITED"
+                        return
+
                 item = self._review_queue.popleft()
+                self._sync_queue_to_state_locked()
                 self._active_queue_item = dict(item)
                 self._scan_phase = "REVIEWING_QUEUED_PULL_REQUEST"
 
+            was_rate_limited = False
             try:
                 self.repository_service.refresh_pr_cache()
                 target = self.repository_service.find_cached_pr(item["pr_key"])
@@ -101,65 +132,128 @@ class ReviewManagementService:
                     continue
                 owner, repo_name = GitHubClient.split_repo(target["repo"])
                 full_pr = self.github_client.get_pr(owner, repo_name, target["number"])
-                self.review_engine.review_single_pr(repo_info, full_pr, force=item["force"])
+                res = self.review_engine.review_single_pr(repo_info, full_pr, force=item["force"])
+                if isinstance(res, dict) and res.get("status") == "RATE_LIMITED":
+                    was_rate_limited = True
             except Exception as e:
                 logger.exception("Error reviewing queued PR %s", item["pr_key"])
                 item["error"] = str(e)
             finally:
                 with self._scan_lock:
+                    if was_rate_limited:
+                        # Put back in first of the queue
+                        # Check if it was not already re-added
+                        if not any(queued["pr_key"] == item["pr_key"] for queued in self._review_queue):
+                            self._review_queue.appendleft(item)
+                            self._sync_queue_to_state_locked()
                     self._active_queue_item = None
 
-    def run_review_scan(self, force: bool = False, pr_key: Optional[str] = None) -> bool:
-        """Queue a selected PR or start a full review scan."""
-        if pr_key:
+    def enqueue_pr(self, pr_key: str, force: bool = False, to_front: bool = False) -> bool:
+        """Adds a PR to the queue if not already queued or actively reviewing (unless updating force)."""
+        with self._scan_lock:
+            existing = next((queued for queued in self._review_queue if queued["pr_key"] == pr_key), None)
+            if existing:
+                if force and not existing.get("force"):
+                    existing["force"] = True
+                    self._sync_queue_to_state_locked()
+                    self._start_queue_worker_locked()
+                    return True
+                return False
+
+            if self._active_queue_item and self._active_queue_item["pr_key"] == pr_key:
+                return False
+
             item = {
                 "pr_key": pr_key,
                 "force": bool(force),
                 "queued_at": datetime.now(timezone.utc).isoformat(),
             }
-            with self._scan_lock:
-                if any(queued["pr_key"] == pr_key for queued in self._review_queue) or (
-                    self._active_queue_item and self._active_queue_item["pr_key"] == pr_key
-                ):
-                    return False
+            if to_front:
+                self._review_queue.appendleft(item)
+            else:
                 self._review_queue.append(item)
-                try:
-                    self._start_queue_worker_locked()
-                except Exception:
+            self._sync_queue_to_state_locked()
+            try:
+                self._start_queue_worker_locked()
+            except Exception:
+                if item in self._review_queue:
                     self._review_queue.remove(item)
-                    raise
+                    self._sync_queue_to_state_locked()
+                raise
             return True
 
+    def scan_and_enqueue_pending(self, force: bool = False) -> int:
+        """
+        Discovers open pull requests across all enabled repositories,
+        identifies those that are pending review, and enqueues them.
+        """
+        if not self.config_manager.is_service_enabled() and not force:
+            logger.info("Review service is currently disabled in config.")
+            return 0
+
+        cached_prs = self.repository_service.refresh_pr_cache()
+        pr_statuses = self.state_manager.get_all_pr_statuses()
+        auth_user = self.github_client.get_username()
+        enqueued_count = 0
+
+        for pr in cached_prs:
+            pr_key = pr["pr_key"]
+            status_entry = pr_statuses.get(pr_key, {})
+            status_name = status_entry.get("status")
+
+            # Check eligibility:
+            # 1. Skip if own PR (author matches auth_user) unless force
+            if pr.get("is_own_pr", False) and not force:
+                continue
+
+            # 2. Skip if already reviewed on current commit SHA unless force
+            head_sha = pr.get("head_sha", "")
+            if status_name == "ALREADY_REVIEWED" and status_entry.get("head_sha") == head_sha and not force:
+                continue
+            if status_name == "COMPLETED" and status_entry.get("head_sha") == head_sha and not force:
+                continue
+            if pr.get("has_user_auto_approved") and not force:
+                continue
+
+            # 3. Skip if max file limit exceeded on current head unless force
+            if status_name == "SKIPPED_MAX_FILES" and status_entry.get("head_sha") == head_sha and not force:
+                continue
+
+            # Enqueue eligible pending PR
+            if self.enqueue_pr(pr_key, force=force):
+                enqueued_count += 1
+
+        self.state_manager.record_last_run()
+        return enqueued_count
+
+    def run_review_scan(self, force: bool = False, pr_key: Optional[str] = None) -> bool:
+        """Queue a selected PR or scan for pending PRs and enqueue them."""
+        if pr_key:
+            return self.enqueue_pr(pr_key, force=force)
+
         with self._scan_lock:
-            if self._scan_in_progress:
+            # If a queue worker is running, we can still discover and enqueue PRs in background
+            if self._scan_in_progress and self._scan_phase != "PROCESSING_REVIEW_QUEUE":
                 logger.info("Scan already in progress. Skipping.")
                 return False
-            self._scan_in_progress = True
-            self._scan_phase = "CHECKING_REPOSITORIES"
 
         def task():
             try:
-                self.repository_service.refresh_pr_cache()
-                self._set_scan_state(True, "DISCOVERING_PULL_REQUESTS")
-                self.review_engine.scan_and_review_all(force=force)
+                self.scan_and_enqueue_pending(force=force)
             except Exception as e:
-                logger.error("Error in review scan task: %s", e)
+                logger.error("Error scanning and enqueuing pending PRs: %s", e)
             finally:
-                self._set_scan_state(True, "REFRESHING_PR_STATUS")
-                try:
-                    self.repository_service.refresh_pr_cache()
-                finally:
-                    with self._scan_lock:
-                        self._scan_in_progress = False
-                        self._scan_phase = "IDLE"
-                        self._start_queue_worker_locked()
+                with self._scan_lock:
+                    self._start_queue_worker_locked()
 
         try:
             self._executor.submit(task)
         except Exception:
-            self._set_scan_state(False, "IDLE")
             raise
         return True
 
     def clear_rate_limit(self) -> None:
         self.state_manager.clear_rate_limit()
+        with self._scan_lock:
+            self._start_queue_worker_locked()
+

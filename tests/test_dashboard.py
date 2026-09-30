@@ -31,6 +31,7 @@ class TestDashboardBackend(unittest.TestCase):
 
         self.state_mgr = StateManager(state_path=self.state_path)
         self.gh_client = MagicMock(spec=GitHubClient)
+        self.gh_client.token = "test-token"
         self.gh_client.get_username.return_value = "my-test-bot"
 
         # Mock list_open_prs
@@ -64,7 +65,7 @@ class TestDashboardBackend(unittest.TestCase):
 
     def tearDown(self):
         self.backend._is_running = False
-        self.backend._executor.shutdown(wait=False)
+        self.backend._executor.shutdown(wait=True)
         shutil.rmtree(self.test_dir, ignore_errors=True)
 
     def test_annotated_status_overlay(self):
@@ -322,7 +323,64 @@ class TestDashboardBackend(unittest.TestCase):
         self.assertTrue(pr["has_conflict"])
         self.assertEqual(pr["mergeable_state"], "dirty")
 
+    def test_queue_only_takes_when_no_rate_limit_or_forced(self):
+        review_service = self.backend.review_service
+        # Simulate active rate limit
+        self.state_mgr.record_rate_limit(600, reason="Quota reached")
+
+        # Enqueue non-forced PR
+        review_service.enqueue_pr("owner/repo1#101", force=False)
+        review_service._start_queue_worker_locked()
+
+        queue_state = review_service.get_review_queue()
+        # Should stay in pending queue and not be actively reviewing because of rate limit
+        self.assertIsNone(queue_state["active"])
+        self.assertEqual(len(queue_state["pending"]), 1)
+        self.assertEqual(queue_state["pending"][0]["pr_key"], "owner/repo1#101")
+
+        # Now enqueue or force a PR
+        review_service.enqueue_pr("owner/repo1#101", force=True)
+        # With force=True, worker can proceed
+        with unittest.mock.patch.object(self.backend.review_engine, "review_single_pr") as mock_review:
+            mock_review.return_value = {"status": "COMPLETED"}
+            review_service._drain_review_queue()
+            mock_review.assert_called_once()
+
+    def test_rate_limited_pr_put_back_to_first_of_queue(self):
+        review_service = self.backend.review_service
+        # Add another PR to queue first
+        review_service._review_queue.append({"pr_key": "owner/repo1#102", "force": False, "queued_at": "2026-09-23T10:00:00Z"})
+
+        # Prepend item
+        review_service._review_queue.appendleft({"pr_key": "owner/repo1#101", "force": False, "queued_at": "2026-09-23T10:01:00Z"})
+
+        with unittest.mock.patch.object(self.backend.review_engine, "review_single_pr") as mock_review:
+            # First PR gets rate limited when reviewed
+            def side_effect(repo_info, pr, force=False):
+                self.state_mgr.record_rate_limit(600, reason="Hit rate limit")
+                return {"status": "RATE_LIMITED", "pr_key": "owner/repo1#101"}
+
+            mock_review.side_effect = side_effect
+            review_service._drain_review_queue()
+
+        queue_state = review_service.get_review_queue()
+        # Item owner/repo1#101 should be placed back at first (index 0) of the queue
+        self.assertEqual(queue_state["pending"][0]["pr_key"], "owner/repo1#101")
+        self.assertEqual(queue_state["pending"][1]["pr_key"], "owner/repo1#102")
+
+    def test_scan_and_enqueue_pending(self):
+        review_service = self.backend.review_service
+        # Pause queue worker so item remains in pending queue to inspect
+        with unittest.mock.patch.object(self.backend.review_engine, "review_single_pr"):
+            with unittest.mock.patch.object(review_service, "_start_queue_worker_locked"):
+                enqueued = review_service.scan_and_enqueue_pending(force=False)
+                self.assertEqual(enqueued, 1)
+                queue_state = review_service.get_review_queue()
+                self.assertTrue(any(item["pr_key"] == "owner/repo1#101" for item in queue_state["pending"]))
+
+
 if __name__ == "__main__":
     unittest.main()
+
 
 

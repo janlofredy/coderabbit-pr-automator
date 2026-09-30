@@ -11,11 +11,15 @@ logger = logging.getLogger("state_manager")
 DEFAULT_CONFIG_DIR = os.getenv("CONFIG_DIR", os.path.expanduser("~/.coderabbit"))
 DEFAULT_STATE_FILE = os.getenv("STATE_PATH", os.path.join(DEFAULT_CONFIG_DIR, "automation_state.json"))
 
+import threading
+import uuid
+
 class StateManager:
     """Manages automation state, rate limit cooldowns, and PR attempt counters."""
 
     def __init__(self, state_path: str = DEFAULT_STATE_FILE):
         self.state_path = state_path
+        self._lock = threading.RLock()
         self.ensure_state_exists()
 
     def _default_state(self) -> Dict[str, Any]:
@@ -28,35 +32,49 @@ class StateManager:
             "attempt_counts": {},
             "active_reviews": {},
             "pr_statuses": {},
-            "last_run_timestamp": ""
+            "last_run_timestamp": "",
+            "review_queue": []
         }
 
     def ensure_state_exists(self) -> None:
-        os.makedirs(os.path.dirname(os.path.abspath(self.state_path)), exist_ok=True)
-        if not os.path.exists(self.state_path):
-            self.save_state(self._default_state())
+        with self._lock:
+            os.makedirs(os.path.dirname(os.path.abspath(self.state_path)), exist_ok=True)
+            if not os.path.exists(self.state_path):
+                self.save_state(self._default_state())
 
     def load_state(self) -> Dict[str, Any]:
-        try:
-            if os.path.exists(self.state_path):
-                with open(self.state_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    defaults = self._default_state()
-                    for k, v in defaults.items():
-                        if k not in data:
-                            data[k] = v
-                    return data
-        except Exception as e:
-            logger.error("Error reading state file at %s: %s", self.state_path, e)
-        return self._default_state()
+        with self._lock:
+            try:
+                if os.path.exists(self.state_path):
+                    with open(self.state_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        defaults = self._default_state()
+                        for k, v in defaults.items():
+                            if k not in data:
+                                data[k] = v
+                        return data
+            except Exception as e:
+                logger.error("Error reading state file at %s: %s", self.state_path, e)
+            return self._default_state()
 
     def save_state(self, state_data: Dict[str, Any]) -> None:
-        target_dir = os.path.dirname(os.path.abspath(self.state_path))
-        os.makedirs(target_dir, exist_ok=True)
-        temp_path = f"{self.state_path}.tmp"
-        with open(temp_path, "w", encoding="utf-8") as f:
-            json.dump(state_data, f, indent=2)
-        os.replace(temp_path, self.state_path)
+        with self._lock:
+            target_dir = os.path.dirname(os.path.abspath(self.state_path))
+            os.makedirs(target_dir, exist_ok=True)
+            unique_id = uuid.uuid4().hex
+            temp_path = f"{self.state_path}.tmp.{unique_id}"
+            try:
+                with open(temp_path, "w", encoding="utf-8") as f:
+                    json.dump(state_data, f, indent=2)
+                os.replace(temp_path, self.state_path)
+            except Exception:
+                if os.path.exists(temp_path):
+                    try:
+                        os.remove(temp_path)
+                    except OSError:
+                        pass
+                raise
+
 
     @staticmethod
     def parse_retry_delay_from_text(cli_output: str, default_delay: int = 900) -> int:
@@ -245,3 +263,15 @@ class StateManager:
             if entry.get("log_id") == log_id:
                 return entry
         return None
+
+    def get_review_queue(self) -> list:
+        """Retrieves the list of queued review items."""
+        state = self.load_state()
+        return list(state.get("review_queue", []))
+
+    def save_review_queue(self, queue_items: list) -> None:
+        """Persists the review queue list to state storage."""
+        state = self.load_state()
+        state["review_queue"] = list(queue_items)
+        self.save_state(state)
+

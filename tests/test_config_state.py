@@ -188,7 +188,25 @@ class TestConfigAndStateManager(unittest.TestCase):
         self.assertIsNotNone(fetched)
         self.assertEqual(fetched["stdout"], "cli output 1")
 
+    def test_review_queue_persistence(self):
+        sm = StateManager(state_path=self.state_path)
+        self.assertEqual(sm.get_review_queue(), [])
+
+        queue_items = [
+            {"pr_key": "owner/repo#1", "force": False, "queued_at": "2026-09-30T10:00:00Z"},
+            {"pr_key": "owner/repo#2", "force": True, "queued_at": "2026-09-30T10:05:00Z"}
+        ]
+        sm.save_review_queue(queue_items)
+
+        loaded = sm.get_review_queue()
+        self.assertEqual(len(loaded), 2)
+        self.assertEqual(loaded[0]["pr_key"], "owner/repo#1")
+        self.assertFalse(loaded[0]["force"])
+        self.assertEqual(loaded[1]["pr_key"], "owner/repo#2")
+        self.assertTrue(loaded[1]["force"])
+
 if __name__ == "__main__":
     unittest.main()
+
 
 

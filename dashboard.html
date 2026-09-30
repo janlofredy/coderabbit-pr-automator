@@ -897,8 +897,9 @@
             }
 
             // PR Grid
-            renderPRs(data.pull_requests || []);
-            renderReviewQueue(data.review_queue || { active: null, pending: [] }, data.pull_requests || []);
+            const reviewQueue = data.review_queue || { active: null, pending: [] };
+            renderPRs(data.pull_requests || [], reviewQueue);
+            renderReviewQueue(reviewQueue, data.pull_requests || []);
         }
 
         function renderReviewQueue(queue, prs) {
@@ -924,27 +925,35 @@
             }).join('');
         }
 
-        function getBotReviewStatus(pr) {
+        function getBotReviewStatus(pr, isQueued = false, isOngoing = false) {
             // Priority 1: Ongoing Review
-            if (pr.status_badge === 'REVIEW_IN_PROGRESS' || pr.status_badge === 'RATE_LIMITED') {
+            if (isOngoing || pr.status_badge === 'REVIEW_IN_PROGRESS') {
                 return { class: 'badge-blue', text: '⚡ Bot Ongoing Review' };
             }
-            // Priority 2: Changes Requested
+            // Priority 2: Queued for Review
+            if (isQueued) {
+                return { class: 'badge-purple', text: '⏳ In Review Queue' };
+            }
+            // Priority 3: Rate Limited
+            if (pr.status_badge === 'RATE_LIMITED') {
+                return { class: 'badge-orange', text: '⏳ Rate Limited (Queued)' };
+            }
+            // Priority 4: Changes Requested
             if (pr.bot_review_outcome === 'CHANGES_REQUESTED' || pr.status_badge === 'OTHER_CHANGES_REQUESTED') {
                 return { class: 'badge-red', text: '❌ Bot Changes Requested' };
             }
-            // Priority 3: Approved
+            // Priority 5: Approved
             if (pr.has_user_auto_approved || pr.status_badge === 'APPROVED' || pr.bot_review_outcome === 'APPROVED') {
                 return { class: 'badge-green', text: '🤖 Bot Approved' };
             }
-            // Priority 4: Failed / Skipped
+            // Priority 6: Failed / Skipped
             if (pr.status_badge === 'REVIEW_FAILED') {
                 return { class: 'badge-red', text: '❌ Review Failed' };
             }
             if (pr.status_badge === 'SKIPPED_MAX_FILES') {
                 return { class: 'badge-red', text: `🛑 ${pr.status_label || 'Skipped (>100 Files)'}` };
             }
-            // Priority 5: Default Pending Review
+            // Priority 7: Default Pending Review
             return { class: 'badge-gray', text: '⏳ Bot Pending Review' };
         }
 
@@ -952,7 +961,7 @@
             return getBotReviewStatus(pr);
         }
 
-        function renderPRs(prs) {
+        function renderPRs(prs, queue = { active: null, pending: [] }) {
             const container = document.getElementById('pr-container');
             if (!prs || prs.length === 0) {
                 container.innerHTML = `
@@ -963,6 +972,9 @@
                 `;
                 return;
             }
+
+            const activePrKey = (queue.active || {}).pr_key;
+            const queuedPrKeys = new Set((queue.pending || []).map(item => item.pr_key));
 
             const groupedPRs = new Map();
             prs.forEach(pr => {
@@ -976,14 +988,17 @@
                     <h3 class="repo-pr-group-header">📁 ${escapeHtml(repo)} <span class="repo-pr-group-count">${repoPRs.length} ${repoPRs.length === 1 ? 'pull request' : 'pull requests'}</span></h3>
                     <div class="repo-pr-grid">
                         ${repoPRs.map(pr => {
+                const isOngoing = activePrKey === pr.pr_key;
+                const isQueued = queuedPrKeys.has(pr.pr_key);
                 const otherApproved = (pr.other_approved_by || []).length > 0 ? `<span>👍 Approved by: <strong>${escapeHtml(pr.other_approved_by.join(', '))}</strong></span>` : '';
 
                 // Generate status pills
                 const pills = [];
 
                 // 1. Bot Review Status always first (only 1)
-                const botStatus = getBotReviewStatus(pr);
+                const botStatus = getBotReviewStatus(pr, isQueued, isOngoing);
                 pills.push(`<span class="badge ${botStatus.class}">${escapeHtml(botStatus.text)}</span>`);
+
 
                 // 2. Author / Ownership
                 if (pr.is_own_pr || pr.status_badge === 'OWN_PR') {
