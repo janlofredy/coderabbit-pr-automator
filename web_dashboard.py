@@ -483,6 +483,17 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({"status": "cleared"}).encode("utf-8"))
             return
 
+        if path == "/api/queue/move-to-top":
+            pr_key = data.get("pr_key")
+            if not pr_key:
+                self._set_headers(400)
+                self.wfile.write(json.dumps({"error": "pr_key is required"}).encode("utf-8"))
+                return
+            success = backend.review_service.move_queue_item_to_top(pr_key)
+            self._set_headers(200 if success else 404)
+            self.wfile.write(json.dumps({"success": success, "pr_key": pr_key}).encode("utf-8"))
+            return
+
         if path == "/api/config" or path == "/api/settings":
             updated = backend.config_manager.update_settings(data)
             backend.github_client.set_token(backend.config_manager.get_github_token())

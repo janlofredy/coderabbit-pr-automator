@@ -379,6 +379,30 @@ class TestDashboardBackend(unittest.TestCase):
                 self.assertTrue(any(item["pr_key"] == "owner/repo1#101" for item in queue_state["pending"]))
 
 
+    def test_move_queue_item_to_top(self):
+        review_service = self.backend.review_service
+        # Add 3 items to queue
+        review_service._review_queue.append({"pr_key": "owner/repo1#101", "force": False, "queued_at": "2026-09-23T10:00:00Z"})
+        review_service._review_queue.append({"pr_key": "owner/repo1#102", "force": False, "queued_at": "2026-09-23T10:01:00Z"})
+        review_service._review_queue.append({"pr_key": "owner/repo1#103", "force": False, "queued_at": "2026-09-23T10:02:00Z"})
+
+        with unittest.mock.patch.object(review_service, "_start_queue_worker_locked"):
+            # Move last item to top
+            success = review_service.move_queue_item_to_top("owner/repo1#103")
+            self.assertTrue(success)
+
+            queue = review_service.get_review_queue()
+            self.assertEqual(queue["pending"][0]["pr_key"], "owner/repo1#103")
+            self.assertEqual(queue["pending"][1]["pr_key"], "owner/repo1#101")
+            self.assertEqual(queue["pending"][2]["pr_key"], "owner/repo1#102")
+
+            # Moving non-existent item returns False
+            self.assertFalse(review_service.move_queue_item_to_top("nonexistent#999"))
+
+            # Moving already top item returns True
+            self.assertTrue(review_service.move_queue_item_to_top("owner/repo1#103"))
+
+
 if __name__ == "__main__":
     unittest.main()
 

@@ -233,33 +233,43 @@
             }
         }
 
-        /* Processing Banner */
+        /* Floating Notification Pill / Banner */
+        .banner-container {
+            display: flex;
+            justify-content: center;
+            width: 100%;
+            pointer-events: none;
+            z-index: 40;
+            padding: 0.65rem 1.5rem;
+            transition: all 0.25s ease;
+        }
+        .banner-container.hidden {
+            display: none !important;
+            padding: 0 !important;
+        }
         .banner-processing {
-            background: linear-gradient(90deg, #1e1b4b, #312e81);
-            border-bottom: 1px solid #6366f1;
+            pointer-events: auto;
+            background: rgba(30, 27, 75, 0.9);
+            border: 1px solid rgba(99, 102, 241, 0.45);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
             color: #e0e7ff;
-            padding: 0.65rem 2rem;
-            display: flex;
-            justify-content: space-between;
+            padding: 0.45rem 1.15rem;
+            border-radius: 9999px;
+            display: inline-flex;
             align-items: center;
-            font-size: 0.9rem;
+            gap: 0.85rem;
+            font-size: 0.84rem;
             font-weight: 500;
+            box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.7), 0 0 16px rgba(99, 102, 241, 0.25);
+            transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
         }
-        .banner-processing.hidden { display: none; }
-
-        .banner-rate-limit {
-            background: linear-gradient(90deg, #7c2d12, #9a3412);
-            border-bottom: 1px solid var(--orange);
-            color: #ffedd5;
-            padding: 0.75rem 2rem;
+        .banner-processing.hidden { display: none !important; }
+        .banner-inner {
             display: flex;
-            justify-content: space-between;
             align-items: center;
-            font-size: 0.95rem;
-            font-weight: 500;
+            gap: 0.45rem;
         }
-
-        .banner-rate-limit.hidden { display: none; }
 
         main {
             flex: 1;
@@ -335,88 +345,225 @@
             margin-bottom: 1.8rem;
         }
 
-        .review-queue-panel {
-            width: 100%;
-            margin-bottom: 2rem;
-            padding: 0.85rem 1.25rem;
-            background: var(--surface-color);
+        /* Queue Header Trigger Button */
+        .btn-queue-trigger {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.55rem;
+            padding: 0.35rem 0.75rem;
+            border-radius: 7px;
+            background: #1e293b;
             border: 1px solid var(--border-color);
-            border-radius: 8px;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+            color: var(--text-main);
+            font-size: 0.8rem;
+            font-weight: 500;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+            cursor: pointer;
         }
-        .review-queue-header {
+        .btn-queue-trigger:hover {
+            background: #334155;
+            border-color: #64748b;
+        }
+        .btn-queue-trigger.active-running {
+            background: linear-gradient(135deg, rgba(30, 58, 138, 0.65), rgba(15, 23, 42, 0.85));
+            border-color: rgba(59, 130, 246, 0.6);
+            box-shadow: 0 0 12px rgba(59, 130, 246, 0.25);
+        }
+        .btn-queue-trigger.rate-limited {
+            background: linear-gradient(135deg, rgba(124, 45, 18, 0.7), rgba(67, 20, 7, 0.85));
+            border-color: rgba(249, 115, 22, 0.7);
+            color: #ffedd5;
+            box-shadow: 0 0 14px rgba(249, 115, 22, 0.35);
+        }
+        .queue-status-indicator {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            line-height: 1;
+        }
+        .queue-header-badge {
+            font-size: 0.72rem;
+            padding: 2px 7px;
+            border-radius: 9999px;
+            font-weight: 600;
+        }
+
+        /* Slide-Over Queue Drawer */
+        .drawer-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.65);
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
+            z-index: 110;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        .drawer-overlay.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        .drawer-panel {
+            position: fixed;
+            top: 0;
+            right: 0;
+            bottom: 0;
+            width: 440px;
+            max-width: 92vw;
+            background: #0f172a;
+            border-left: 1px solid var(--border-color);
+            box-shadow: -10px 0 35px rgba(0, 0, 0, 0.6);
+            display: flex;
+            flex-direction: column;
+            transform: translateX(100%);
+            transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+            z-index: 111;
+        }
+        .drawer-overlay.active .drawer-panel {
+            transform: translateX(0);
+        }
+        .drawer-header {
+            padding: 1.15rem 1.25rem;
+            border-bottom: 1px solid var(--border-color);
+            background: #111827;
             display: flex;
             align-items: center;
             justify-content: space-between;
             gap: 0.75rem;
-            margin-bottom: 0.65rem;
         }
-        .review-queue-title-wrap {
+        .drawer-title-wrap {
             display: flex;
             align-items: center;
-            gap: 0.65rem;
+            gap: 0.75rem;
         }
-        .review-queue-header h2 {
-            margin: 0;
+        .drawer-icon-wrap {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            background: rgba(59, 130, 246, 0.15);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            color: #60a5fa;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             font-size: 0.95rem;
-            font-weight: 600;
-            letter-spacing: 0.02em;
+        }
+        .drawer-title {
+            margin: 0;
+            font-size: 1rem;
+            font-weight: 700;
             color: var(--text-main);
+            line-height: 1.2;
+        }
+        .drawer-subtitle {
+            margin: 0;
+            font-size: 0.72rem;
+            color: var(--text-muted);
+        }
+        .drawer-ratelimit-box {
+            margin: 0.85rem 1.25rem 0;
+            padding: 0.85rem 1rem;
+            background: linear-gradient(135deg, rgba(124, 45, 18, 0.4), rgba(67, 20, 7, 0.6));
+            border: 1px solid rgba(249, 115, 22, 0.4);
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+        }
+        .drawer-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1rem 1.25rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+        .drawer-footer {
+            padding: 0.85rem 1.25rem;
+            border-top: 1px solid var(--border-color);
+            background: #111827;
         }
         .review-queue-list {
             display: flex;
-            gap: 0.65rem;
-            overflow-x: auto;
-            padding-bottom: 0.35rem;
-            align-items: stretch;
-            scrollbar-width: thin;
-            scrollbar-color: var(--border-color) transparent;
-        }
-        .review-queue-list::-webkit-scrollbar {
-            height: 6px;
-        }
-        .review-queue-list::-webkit-scrollbar-thumb {
-            background: var(--border-color);
-            border-radius: 3px;
+            flex-direction: column;
+            gap: 0.75rem;
         }
         .review-queue-item {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.55rem;
-            padding: 0.45rem 0.75rem;
-            background: var(--bg-color);
+            display: flex;
+            flex-direction: column;
+            padding: 0.85rem 1rem;
+            background: #162032;
             border: 1px solid var(--border-color);
-            border-radius: 6px;
-            font-size: 0.82rem;
-            white-space: nowrap;
-            flex-shrink: 0;
-            transition: border-color 0.15s, background-color 0.15s;
+            border-radius: 8px;
+            gap: 0.5rem;
+            transition: all 0.15s ease;
         }
         .review-queue-item:hover {
             border-color: #4b5563;
-            background: #151d2c;
+            background: #1a273f;
         }
         .review-queue-item.active {
-            border-color: #3b82f6;
-            background: #172554;
+            background: linear-gradient(135deg, rgba(30, 58, 138, 0.35), rgba(15, 23, 42, 0.7));
+            border-color: rgba(59, 130, 246, 0.6);
+            box-shadow: 0 0 16px rgba(59, 130, 246, 0.2);
         }
-        .review-queue-item strong {
-            color: var(--text-main);
-            font-size: 0.82rem;
+        .review-queue-item-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.5rem;
+        }
+        .btn-prioritize {
+            padding: 0.2rem 0.55rem;
+            font-size: 0.72rem;
+            background: rgba(99, 102, 241, 0.15);
+            border: 1px solid rgba(99, 102, 241, 0.35);
+            color: #c7d2fe;
+            border-radius: 5px;
             font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            white-space: nowrap;
+        }
+        .btn-prioritize:hover {
+            background: rgba(99, 102, 241, 0.35);
+            border-color: rgba(99, 102, 241, 0.7);
+            color: #ffffff;
+            transform: translateY(-1px);
+        }
+        .review-queue-item-main {
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
         }
         .review-queue-item-title {
             color: var(--text-muted);
             font-size: 0.8rem;
-            max-width: 260px;
+            line-height: 1.35;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
             overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
+        }
+        .review-queue-item-footer {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding-top: 0.4rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.05);
+            font-size: 0.75rem;
+            color: var(--text-muted);
         }
         .review-queue-empty {
+            text-align: center;
             color: var(--text-muted);
             font-size: 0.85rem;
-            padding: 0.25rem 0;
+            padding: 2.5rem 1rem;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px dashed var(--border-color);
+            border-radius: 8px;
         }
 
         .pr-card {
@@ -524,10 +671,10 @@
             font-size: 0.8rem;
             font-weight: 500;
             line-height: 1.25;
-            flex: 1;
             justify-content: center;
             text-align: center;
             white-space: nowrap;
+            flex-shrink: 0;
         }
 
         .pr-actions {
@@ -538,6 +685,10 @@
             padding-top: 0.75rem;
             border-top: 1px solid rgba(55, 65, 81, 0.5);
             width: 100%;
+        }
+
+        .pr-actions .btn {
+            flex: 1;
         }
 
         /* Modal Styles */
@@ -571,6 +722,11 @@
             box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
         }
 
+        .modal .btn {
+            flex: 0 0 auto;
+            width: auto;
+        }
+
         .modal-header {
             display: flex;
             justify-content: space-between;
@@ -578,6 +734,29 @@
             margin-bottom: 1.25rem;
             border-bottom: 1px solid var(--border-color);
             padding-bottom: 0.75rem;
+        }
+
+        .modal-close-btn {
+            background: transparent;
+            border: 1px solid transparent;
+            color: var(--text-muted);
+            font-size: 1.15rem;
+            line-height: 1;
+            width: 30px;
+            height: 30px;
+            border-radius: 6px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            transition: all 0.15s;
+        }
+
+        .modal-close-btn:hover {
+            color: var(--text-main);
+            background: var(--surface-hover);
+            border-color: var(--border-color);
         }
 
         .repo-item {
@@ -632,34 +811,74 @@
                 <span id="service-status-pill" class="status-icon-pill" title="Auto-Review Service: Running">🟢</span>
                 <span id="github-auth-pill" class="status-icon-pill" title="GitHub Authentication Status: Checking…">🐙</span>
                 <button id="coderabbit-auth-pill" class="status-icon-pill clickable" type="button" onclick="openCodeRabbitAuthInstructions()" title="CodeRabbit CLI: Checking… (Click for instructions)">🐰</button>
-                <button id="global-rate-limit-pill" class="status-icon-pill clickable" style="display:none;" onclick="clearRateLimit(this)" title="CodeRabbit Rate Limit active. Click to clear cooldown.">⏳</button>
             </div>
+            <button id="btn-queue-drawer" class="btn btn-sm btn-queue-trigger" onclick="toggleQueueDrawer()" title="View Review Queue & Runner Status">
+                <span id="queue-status-indicator" class="queue-status-indicator">⚡</span>
+                <span id="queue-btn-label">Review Queue</span>
+                <span id="queue-header-badge" class="badge badge-gray queue-header-badge">0</span>
+            </button>
             <button id="btn-settings" class="btn btn-sm" onclick="openSettingsModal()">⚙️ Settings</button>
             <button id="btn-scan-now" class="btn btn-primary btn-sm" onclick="triggerScan(false)">▶ Run Scan Now</button>
         </div>
     </header>
 
-    <div id="processing-banner" class="banner-processing hidden">
-        <div>
-            <span class="spinner" style="border-top-color: #a5b4fc;"></span>
-            <strong>Repository Management:</strong>
-            <span id="processing-banner-text" style="margin-left: 0.5rem;">Checking enabled repositories...</span>
+    <!-- Floating Dynamic Island Notification Bar -->
+    <div id="banner-container" class="banner-container hidden">
+        <div id="processing-banner" class="banner-processing hidden">
+            <div class="banner-inner">
+                <span class="spinner" style="border-top-color: #a5b4fc;"></span>
+                <strong style="color: #c7d2fe;">Repository Management:</strong>
+                <span id="processing-banner-text" style="color: #e0e7ff;">Checking enabled repositories...</span>
+            </div>
+            <span id="processing-banner-state" class="badge badge-purple" style="font-size: 0.72rem; font-weight: 700; letter-spacing: 0.03em;">CHECKING REPOS</span>
         </div>
-        <span id="processing-banner-state" class="badge badge-purple" style="font-size: 0.75rem;">CHECKING REPOS</span>
     </div>
 
-    <section class="review-queue-panel" aria-labelledby="review-queue-title">
-        <div class="review-queue-header">
-            <div class="review-queue-title-wrap">
-                <h2 id="review-queue-title">Review Queue</h2>
-                <span id="review-queue-count" class="badge badge-gray">0 queued</span>
+    <!-- Review Queue Slide-Over Drawer Overlay & Panel -->
+    <div id="queue-drawer-overlay" class="drawer-overlay" onclick="closeQueueDrawer(event)">
+        <aside id="queue-drawer" class="drawer-panel" onclick="event.stopPropagation()" aria-labelledby="review-queue-title">
+            <div class="drawer-header">
+                <div class="drawer-title-wrap">
+                    <div class="drawer-icon-wrap">⚡</div>
+                    <div>
+                        <h2 id="review-queue-title" class="drawer-title">Review Queue</h2>
+                        <p class="drawer-subtitle">Sequential CodeRabbit automated reviews</p>
+                    </div>
+                </div>
+                <div style="display: flex; align-items: center; gap: 0.65rem;">
+                    <span id="review-queue-count" class="badge badge-gray">0 queued</span>
+                    <button class="modal-close-btn" onclick="closeQueueDrawer()" title="Close Drawer (Esc)">✕</button>
+                </div>
             </div>
-        </div>
-        <div id="review-queue-list" class="review-queue-list">
-            <div class="review-queue-empty">No pull requests are waiting for review.</div>
-        </div>
-    </section>
 
+            <!-- Rate Limit Alert inside Drawer -->
+            <div id="queue-drawer-ratelimit-alert" class="drawer-ratelimit-box" style="display: none;">
+                <div style="display: flex; align-items: flex-start; gap: 0.65rem;">
+                    <span style="font-size: 1.15rem; line-height: 1;">⏳</span>
+                    <div style="flex: 1;">
+                        <strong style="color: #fed7aa; font-size: 0.82rem; display: block;">CodeRabbit Rate Limit Active</strong>
+                        <span id="queue-drawer-ratelimit-text" style="color: #ffedd5; font-size: 0.78rem; display: block; margin-top: 2px;">Reviews paused. Cooldown in progress.</span>
+                    </div>
+                </div>
+                <button class="btn btn-sm btn-warning" style="margin-top: 0.65rem; width: 100%; justify-content: center;" onclick="clearRateLimit(this)">
+                    ⚡ Clear Cooldown & Resume Queue
+                </button>
+            </div>
+
+            <div class="drawer-body">
+                <div id="review-queue-list" class="review-queue-list">
+                    <div class="review-queue-empty">No pull requests are waiting for review.</div>
+                </div>
+            </div>
+
+            <div class="drawer-footer">
+                <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.78rem; color: var(--text-muted); width: 100%;">
+                    <span>Runner: <code>CodeRabbit CLI</code></span>
+                    <span>Order: <strong>FIFO Queue</strong></span>
+                </div>
+            </div>
+        </aside>
+    </div>
 
     <main>
         <div class="stats-bar">
@@ -698,14 +917,14 @@
         <div class="modal">
             <div class="modal-header">
                 <h3>Manage GitHub Repositories</h3>
-                <button class="btn btn-sm" onclick="closeRepoModal()">✕</button>
+                <button class="modal-close-btn" onclick="closeRepoModal()" title="Close">✕</button>
             </div>
             <div id="repo-list">
                 <!-- Dynamically loaded list of repos -->
             </div>
-            <div class="form-group">
-                <input type="text" id="new-repo-name" class="form-input" placeholder="owner/repository (e.g. facebook/react)">
-                <button class="btn btn-primary" onclick="addRepo()">Add Repo</button>
+            <div class="form-group" style="align-items: center;">
+                <input type="text" id="new-repo-name" class="form-input" placeholder="owner/repository (e.g. facebook/react)" style="flex: 1;">
+                <button class="btn btn-primary" style="flex-shrink: 0;" onclick="addRepo()">Add Repo</button>
             </div>
             <div id="repo-modal-msg" style="margin-top: 0.75rem; font-size: 0.85rem;"></div>
         </div>
@@ -716,7 +935,7 @@
         <div class="modal" style="max-width: 520px;">
             <div class="modal-header">
                 <h3>🐰 CodeRabbit Auth Status</h3>
-                <button class="btn btn-sm" onclick="closeCodeRabbitAuthInstructions()">✕</button>
+                <button class="modal-close-btn" onclick="closeCodeRabbitAuthInstructions()" title="Close">✕</button>
             </div>
             <div id="coderabbit-auth-message" style="margin: 1rem 0;">Checking CLI status…</div>
             <p style="color: var(--text-muted);">Google browser sign-in must run on the Docker host because CodeRabbit CLI browser OAuth is unavailable inside Docker/CI.</p>
@@ -728,9 +947,9 @@
             </ol>
             <p>For CasaOS, authenticate on another machine, then copy the CLI state into <code>/DATA/AppData/coderabbit/coderabbit-cli</code>.</p>
             <p>For headless API-key authentication, run <code>docker exec -it coderabbit-pr-automator coderabbit auth login --api-key "&lt;key&gt;"</code>. <a href="https://docs.coderabbit.ai/cli/reference" target="_blank" rel="noopener noreferrer">CLI auth reference</a></p>
-            <div style="display:flex; justify-content:flex-end; margin-top:1.25rem;">
+            <div style="display:flex; justify-content:flex-end; gap:0.5rem; margin-top:1.25rem;">
                 <button class="btn btn-sm" onclick="refreshCodeRabbitAuthStatus()">Refresh status</button>
-                <button class="btn btn-secondary" onclick="closeCodeRabbitAuthInstructions()">Close</button>
+                <button class="btn btn-secondary btn-sm" onclick="closeCodeRabbitAuthInstructions()">Close</button>
             </div>
         </div>
     </div>
@@ -740,7 +959,7 @@
         <div class="modal" style="max-width: 550px;">
             <div class="modal-header">
                 <h3>⚙️ Service Configuration & Settings</h3>
-                <button class="btn btn-sm" onclick="closeSettingsModal()">✕</button>
+                <button class="modal-close-btn" onclick="closeSettingsModal()" title="Close">✕</button>
             </div>
             <div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1.25rem;">
                 Settings are saved to persistent storage and take effect immediately. GitHub credentials are stored separately from <code>config.json</code> and never shown again after saving.
@@ -907,22 +1126,6 @@
                 }
             }
 
-            // Global CodeRabbit Rate Limit Indicator (Emoji only with countdown in tooltip)
-            const rateLimitPill = document.getElementById('global-rate-limit-pill');
-            if (rateLimitPill) {
-                if (data.rate_limited) {
-                    const remainingSec = Math.max(0, data.rate_limit_remaining_seconds || 0);
-                    const minutes = Math.floor(remainingSec / 60);
-                    const seconds = remainingSec % 60;
-                    const timeStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
-                    rateLimitPill.style.display = "inline-flex";
-                    rateLimitPill.textContent = "⏳";
-                    rateLimitPill.title = `Rate Limited: ${timeStr} remaining (${data.rate_limit_reason || 'Quota exceeded'}). Click to clear cooldown.`;
-                } else {
-                    rateLimitPill.style.display = "none";
-                }
-            }
-
             // Tracked Repositories description in Settings Modal
             const repoDesc = document.getElementById('setting-repo-count-desc');
             if (repoDesc && data.repositories) {
@@ -946,11 +1149,13 @@
             const processingBanner = document.getElementById('processing-banner');
             const processingBannerText = document.getElementById('processing-banner-text');
             const processingBannerState = document.getElementById('processing-banner-state');
+            const bannerContainer = document.getElementById('banner-container');
             const repositoryStatus = data.repository_status || {};
 
             if (processingBanner) {
                 if (repositoryStatus.active) {
                     processingBanner.classList.remove('hidden');
+                    if (bannerContainer) bannerContainer.classList.remove('hidden');
                     const repositoryPhases = {
                         VALIDATING_REPOSITORY: 'VALIDATING REPO',
                         ADDING_REPOSITORY: 'ADDING REPO',
@@ -967,13 +1172,115 @@
                     }
                 } else {
                     processingBanner.classList.add('hidden');
+                    if (bannerContainer) bannerContainer.classList.add('hidden');
                 }
             }
 
-            // PR Grid
+            // PR Grid & Review Queue
             const reviewQueue = data.review_queue || { active: null, pending: [] };
             renderPRs(data.pull_requests || [], reviewQueue);
             renderReviewQueue(reviewQueue, data.pull_requests || []);
+            updateQueueHeaderButton(reviewQueue, data.rate_limited, data.rate_limit_remaining_seconds, data.rate_limit_reason);
+        }
+
+        /* Drawer Controls */
+        function toggleQueueDrawer() {
+            const overlay = document.getElementById('queue-drawer-overlay');
+            if (overlay) overlay.classList.toggle('active');
+        }
+
+        function openQueueDrawer() {
+            const overlay = document.getElementById('queue-drawer-overlay');
+            if (overlay) overlay.classList.add('active');
+        }
+
+        function closeQueueDrawer(e) {
+            if (e && e.target && e.target !== document.getElementById('queue-drawer-overlay') && !e.target.classList.contains('modal-close-btn')) {
+                return;
+            }
+            const overlay = document.getElementById('queue-drawer-overlay');
+            if (overlay) overlay.classList.remove('active');
+        }
+
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                const overlay = document.getElementById('queue-drawer-overlay');
+                if (overlay && overlay.classList.contains('active')) {
+                    overlay.classList.remove('active');
+                }
+            }
+        });
+
+        /* Update Header Queue Button with Live Status & Rate Limit State */
+        function updateQueueHeaderButton(queue, isRateLimited, remainingSec, rateLimitReason) {
+            const btn = document.getElementById('btn-queue-drawer');
+            const indicator = document.getElementById('queue-status-indicator');
+            const label = document.getElementById('queue-btn-label');
+            const badge = document.getElementById('queue-header-badge');
+            if (!btn) return;
+
+            const pending = queue && queue.pending ? queue.pending : [];
+            const active = queue && queue.active ? [queue.active] : [];
+
+            if (isRateLimited) {
+                btn.className = 'btn btn-sm btn-queue-trigger rate-limited';
+                if (indicator) indicator.textContent = '⏳';
+                const rem = Math.max(0, remainingSec || 0);
+                const minutes = Math.floor(rem / 60);
+                const seconds = rem % 60;
+                const timeStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+                if (label) label.textContent = 'Queue Rate-Limited';
+                if (badge) {
+                    badge.textContent = timeStr;
+                    badge.className = 'badge badge-orange queue-header-badge';
+                }
+                btn.title = `CodeRabbit Rate Limit active (${timeStr} remaining). Reviews are queued. Click to open Queue & manage cooldown.`;
+            } else if (active.length > 0) {
+                btn.className = 'btn btn-sm btn-queue-trigger active-running';
+                if (indicator) indicator.textContent = '⚡';
+                if (label) label.textContent = 'Review Queue';
+                if (badge) {
+                    badge.textContent = `${active.length} active · ${pending.length} queued`;
+                    badge.className = 'badge badge-blue queue-header-badge';
+                }
+                btn.title = `Review in progress (${pending.length} waiting). Click to view Review Queue.`;
+            } else if (pending.length > 0) {
+                btn.className = 'btn btn-sm btn-queue-trigger';
+                if (indicator) indicator.textContent = '⏳';
+                if (label) label.textContent = 'Review Queue';
+                if (badge) {
+                    badge.textContent = `${pending.length} queued`;
+                    badge.className = 'badge badge-purple queue-header-badge';
+                }
+                btn.title = `${pending.length} pull request(s) queued for review. Click to view.`;
+            } else {
+                btn.className = 'btn btn-sm btn-queue-trigger';
+                if (indicator) indicator.textContent = '⚡';
+                if (label) label.textContent = 'Review Queue';
+                if (badge) {
+                    badge.textContent = '0';
+                    badge.className = 'badge badge-gray queue-header-badge';
+                }
+                btn.title = 'Review Queue is idle. Click to view runner status.';
+            }
+
+            // Also update drawer rate-limit box
+            const drawerAlert = document.getElementById('queue-drawer-ratelimit-alert');
+            const drawerAlertText = document.getElementById('queue-drawer-ratelimit-text');
+            if (drawerAlert) {
+                if (isRateLimited) {
+                    drawerAlert.style.display = 'block';
+                    const rem = Math.max(0, remainingSec || 0);
+                    const minutes = Math.floor(rem / 60);
+                    const seconds = rem % 60;
+                    const timeStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+                    if (drawerAlertText) {
+                        drawerAlertText.textContent = `Reviews paused. Cooldown: ${timeStr} remaining (${rateLimitReason || 'Quota reached'}).`;
+                    }
+                } else {
+                    drawerAlert.style.display = 'none';
+                }
+            }
         }
 
         function renderReviewQueue(queue, prs) {
@@ -986,26 +1293,76 @@
             count.textContent = `${pending.length} waiting${active.length ? ` · ${active.length} reviewing` : ''}`;
             count.className = active.length ? 'badge badge-blue' : pending.length ? 'badge badge-purple' : 'badge badge-gray';
             if (!items.length) {
-                list.innerHTML = '<div class="review-queue-empty">No pull requests are waiting for review.</div>';
+                list.innerHTML = '<div class="review-queue-empty">✨ No pull requests are waiting for review.<br><small style="color:var(--text-muted); margin-top:6px; display:inline-block;">Automatic scans will populate the queue sequentially.</small></div>';
                 return;
             }
             const prsByKey = new Map(prs.map(pr => [pr.pr_key, pr]));
             list.innerHTML = items.map((item, index) => {
                 const pr = prsByKey.get(item.pr_key) || {};
                 const isOngoing = index === 0 && active.length > 0;
-                const state = isOngoing ? '⚡ In Progress' : `#${index + (active.length ? 0 : 1)}`;
+                const state = isOngoing ? '⚡ IN PROGRESS' : `#${index + (active.length ? 0 : 1)} WAITING`;
                 const repoNum = pr.repo && pr.number ? `${escapeHtml(pr.repo)} #${pr.number}` : escapeHtml(item.pr_key);
                 const titleAttr = pr.title ? ` title="${escapeHtml(pr.title)}"` : '';
                 const detailsUrl = `/pr-details?pr_key=${encodeURIComponent(item.pr_key)}`;
-                return `<div class="review-queue-item ${isOngoing ? 'active' : ''}">` +
-                    `<span class="badge ${isOngoing ? 'badge-blue' : 'badge-gray'}">${state}</span>` +
-                    `<a href="${detailsUrl}" style="color:inherit; text-decoration:none; display:inline-flex; align-items:center; gap:0.4rem;">` +
-                    `<strong>${repoNum}</strong>` +
-                    (pr.title ? `<span class="review-queue-item-title"${titleAttr}>${escapeHtml(pr.title)}</span>` : '') +
-                    `</a>` +
-                    (item.force ? '<span class="badge badge-orange" style="font-size:0.7rem; padding:1px 5px;">Force</span>' : '') +
-                    `</div>`;
+                const author = pr.author ? `<span>👤 <strong>${escapeHtml(pr.author)}</strong></span>` : '';
+                const branch = pr.head_ref ? `<span>🌱 <code>${escapeHtml(pr.head_ref)}</code></span>` : '';
+                const forceBadge = item.force ? '<span class="badge badge-orange" style="font-size:0.7rem; padding:1px 5px;">Force</span>' : '';
+
+                const canMoveToTop = !isOngoing && (active.length ? index > 1 : index > 0);
+                const isNextUp = !isOngoing && (active.length ? index === 1 : index === 0);
+                const priorityAction = canMoveToTop 
+                    ? `<button class="btn btn-prioritize" onclick="moveQueueItemToTop('${escapeHtml(item.pr_key)}', this)" title="Prioritize: Move to top of review queue">⏫ Move to Top</button>`
+                    : isNextUp ? `<span class="badge badge-purple" style="font-size:0.7rem; padding:1px 6px;">Next Up</span>` : '';
+
+                return `
+                <div class="review-queue-item ${isOngoing ? 'active' : ''}">
+                    <div class="review-queue-item-header">
+                        <span class="badge ${isOngoing ? 'badge-blue' : 'badge-gray'}">${state}</span>
+                        <div style="display:flex; align-items:center; gap:0.4rem;">
+                            ${priorityAction}
+                            ${forceBadge}
+                            <a href="${detailsUrl}" class="btn btn-sm" style="padding: 0.2rem 0.5rem; font-size:0.75rem;" title="View PR details">Details ↗</a>
+                        </div>
+                    </div>
+                    <div class="review-queue-item-main">
+                        <a href="${detailsUrl}" style="color:inherit; text-decoration:none; font-weight:700; font-size:0.88rem;">
+                            ${repoNum}
+                        </a>
+                        ${pr.title ? `<div class="review-queue-item-title"${titleAttr}>${escapeHtml(pr.title)}</div>` : ''}
+                    </div>
+                    <div class="review-queue-item-footer">
+                        <div style="display:flex; gap:0.75rem; align-items:center;">
+                            ${author}
+                            ${branch}
+                        </div>
+                        ${pr.html_url ? `<a href="${pr.html_url}" target="_blank" rel="noopener noreferrer" style="color:var(--text-muted); text-decoration:none;" title="Open in GitHub">GitHub ↗</a>` : ''}
+                    </div>
+                </div>
+                `;
             }).join('');
+        }
+
+        async function moveQueueItemToTop(prKey, btn) {
+            if (btn) setButtonLoading(btn, true, '<span class="spinner"></span>');
+            showToast(`Moving ${prKey} to the top of review queue...`, 'info');
+            try {
+                const res = await fetch('/api/queue/move-to-top', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ pr_key: prKey })
+                });
+                const result = await res.json();
+                if (res.ok && result.success) {
+                    showToast(`Moved ${prKey} to top of queue!`, 'success');
+                    await fetchStatus();
+                } else {
+                    showToast(`Could not move ${prKey}: ${result.error || 'PR not in queue'}`, 'error');
+                }
+            } catch (err) {
+                showToast(`Failed to prioritize queue item: ${err}`, 'error');
+            } finally {
+                if (btn) setButtonLoading(btn, false);
+            }
         }
 
 

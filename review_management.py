@@ -182,6 +182,21 @@ class ReviewManagementService:
                 raise
             return True
 
+    def move_queue_item_to_top(self, pr_key: str) -> bool:
+        """Moves a queued PR item to the front of the pending review queue."""
+        with self._scan_lock:
+            target_idx = next((i for i, item in enumerate(self._review_queue) if item["pr_key"] == pr_key), None)
+            if target_idx is None:
+                return False
+            if target_idx == 0:
+                return True
+            item = self._review_queue[target_idx]
+            del self._review_queue[target_idx]
+            self._review_queue.appendleft(item)
+            self._sync_queue_to_state_locked()
+            self._start_queue_worker_locked()
+            return True
+
     def scan_and_enqueue_pending(self, force: bool = False) -> int:
         """
         Discovers open pull requests across all enabled repositories,
