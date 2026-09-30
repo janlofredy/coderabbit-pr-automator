@@ -289,6 +289,9 @@ class TestReviewEngine(unittest.TestCase):
         self.gh_client.resolve_previous_review_threads.assert_called_once_with(
             "owner", "my-repo", 13, "coderabbit-bot", keep_review_id=802
         )
+        self.gh_client.minimize_previous_reviews.assert_called_once_with(
+            "owner", "my-repo", 13, "coderabbit-bot", keep_review_id=802
+        )
         self.assertEqual(res["critical_major_count"], 0)
         self.assertEqual(res["minor_count"], 0)
 

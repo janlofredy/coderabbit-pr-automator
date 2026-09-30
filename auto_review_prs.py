@@ -540,10 +540,12 @@ class AutoReviewEngine:
         if file_count > max_files_limit:
             self.state_manager.set_pr_reviewing(pr_key, False)
             logger.warning("PR %s has %d files (limit %d). Skipping review.", pr_key, file_count, max_files_limit)
-            skip_comment = f"""🐰 **Automated CodeRabbit Review Skipped**
+            skip_comment = f"""## 🐰 CodeRabbit Review Skipped
+---
+
 - **Target Base Branch**: `{base_ref}`
 - **Head Branch**: `{head_ref}` (`{head_sha[:8]}`)
----
+
 > 🛑 **Review Skipped**: The pull request modifies **{file_count} files**, which exceeds the CodeRabbit Free Tier ceiling of **{max_files_limit} files**.
 >
 > **Action**: Please split this pull request into smaller, focused changes or review manually.
@@ -571,10 +573,12 @@ class AutoReviewEngine:
         account_name = account.get("name") if account and account.get("name") else "Default (Global CLI)"
         account_id = account.get("id") if account and account.get("id") else "default"
 
-        in_progress_comment = f"""🐰 **Automated CodeRabbit Review In Progress**
+        in_progress_comment = f"""## 🐰 CodeRabbit Review In Progress
+---
+
 - **Target Base Branch**: `{base_ref}`
 - **Head Branch**: `{head_ref}` (`{head_sha[:8]}`)
----
+
 ⚡ **Status**: Running CodeRabbit review...
 """
         bot_comment = self.github_client.create_or_update_comment(owner, repo_name, pr_number, in_progress_comment)
@@ -610,10 +614,12 @@ class AutoReviewEngine:
                 self.state_manager.record_rate_limit(delay_sec, reason_msg, pr_key)
             self.state_manager.set_pr_reviewing(pr_key, False)
 
-            rate_limit_comment = f"""🐰 **Automated CodeRabbit Review In Progress**
+            rate_limit_comment = f"""## 🐰 CodeRabbit Review In Progress
+---
+
 - **Target Base Branch**: `{base_ref}`
 - **Head Branch**: `{head_ref}` (`{head_sha[:8]}`)
----
+
 ### ⏳ Review Temporarily Delayed
 > ⚠️ Automated review was temporarily delayed and will resume automatically.
 """
@@ -639,10 +645,12 @@ class AutoReviewEngine:
         if retcode != 0:
             logger.error("CodeRabbit review failed with exit code %s: %s", retcode, stderr)
             self.state_manager.set_pr_reviewing(pr_key, False)
-            err_comment = f"""🐰 **Automated CodeRabbit Review Failed**
+            err_comment = f"""## 🐰 CodeRabbit Review Failed
+---
+
 - **Target Base Branch**: `{base_ref}`
 - **Head Branch**: `{head_ref}` (`{head_sha[:8]}`)
----
+
 > ❌ Automated review could not be completed at this time.
 """
             self.github_client.create_or_update_comment(owner, repo_name, pr_number, err_comment, comment_id)
@@ -685,10 +693,12 @@ class AutoReviewEngine:
             error_message = "CodeRabbit did not produce a confirmed, complete review result"
             logger.error("%s for %s (exit=%s, status=%s)", error_message, pr_key, retcode, parsed.get("completion_status", "unknown"))
             self.state_manager.set_pr_reviewing(pr_key, False)
-            failure_comment = f"""🐰 **Automated CodeRabbit Review Failed**
+            failure_comment = f"""## 🐰 CodeRabbit Review Failed
+---
+
 - **Target Base Branch**: `{base_ref}`
 - **Head Branch**: `{head_ref}` (`{head_sha[:8]}`)
----
+
 > ❌ Review result was incomplete or unreadable. No review decision was submitted.
 """
             self.github_client.create_or_update_comment(owner, repo_name, pr_number, failure_comment, comment_id)
@@ -856,6 +866,15 @@ class AutoReviewEngine:
             )
             if resolved_count:
                 logger.info("Resolved %d previous review thread(s) by %s on %s PR #%s", resolved_count, auth_user, full_name, pr_number)
+            minimized_count = self.github_client.minimize_previous_reviews(
+                owner,
+                repo_name,
+                pr_number,
+                auth_user or "",
+                keep_review_id=submitted_review.get("id"),
+            )
+            if minimized_count:
+                logger.info("Minimized %d previous review(s) by %s on %s PR #%s as OUTDATED", minimized_count, auth_user, full_name, pr_number)
         except Exception as e:
             logger.error("Failed to submit PR review on %s: %s", pr_key, e)
             self.state_manager.set_pr_reviewing(pr_key, False)
@@ -874,21 +893,25 @@ class AutoReviewEngine:
                 "stdout": stdout, "stderr": stderr, "error": str(e)
             })
             self.state_manager.record_pr_status(pr_key, status_data)
-            failure_comment = f"""🐰 **Automated CodeRabbit Review Failed**
+            failure_comment = f"""## 🐰 CodeRabbit Review Failed
+---
+
 - **Target Base Branch**: `{base_ref}`
 - **Head Branch**: `{head_ref}` (`{head_sha[:8]}`)
----
+
 > ❌ Review submission rejected by GitHub.
 """
             self.github_client.create_or_update_comment(owner, repo_name, pr_number, failure_comment, comment_id)
             return status_data
 
         # Update bot status comment to Completed
-        completed_comment = f"""🐰 **Automated CodeRabbit Review Completed**
+        completed_comment = f"""## 🐰 CodeRabbit Review Completed
+---
+
 - **Target Base Branch**: `{base_ref}`
 - **Head Branch**: `{head_ref}` (`{head_sha[:8]}`)
 - **Status**: {review_outcome} ({critical_major_count} critical/major, {minor_count} minor findings)
----
+
 Review complete. Detailed findings submitted directly to this pull request.
 """
         self.github_client.create_or_update_comment(owner, repo_name, pr_number, completed_comment, comment_id)

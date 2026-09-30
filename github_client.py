@@ -145,6 +145,92 @@ class GitHubClient:
             logger.warning("Could not resolve previous review threads on %s/%s PR #%s: %s", owner, repo, pr_number, e)
             return 0
 
+    def minimize_previous_reviews(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        username: str,
+        keep_review_id: Optional[int] = None,
+    ) -> int:
+        """
+        Minimizes top-level pull request review comments submitted by the bot prior to keep_review_id.
+        Marks them as OUTDATED via GraphQL minimizeComment mutation so they appear collapsed.
+        Failures are best-effort.
+        """
+        if not username:
+            return 0
+
+        try:
+            pr = self.get_pr(owner, repo, pr_number)
+            pr_node_id = pr.get("node_id")
+            if not pr_node_id:
+                logger.warning("Cannot minimize old reviews: PR node ID missing")
+                return 0
+
+            query = """query($id: ID!, $cursor: String) {
+              node(id: $id) {
+                ... on PullRequest {
+                  reviews(first: 100, after: $cursor) {
+                    nodes {
+                      id
+                      databaseId
+                      body
+                      author { login }
+                      ... on Minimizable {
+                        isMinimized
+                      }
+                    }
+                    pageInfo { hasNextPage endCursor }
+                  }
+                }
+              }
+            }"""
+            mutation = """mutation($subjectId: ID!) {
+              minimizeComment(input: {subjectId: $subjectId, classifier: OUTDATED}) {
+                minimizedComment { isMinimized }
+              }
+            }"""
+
+            cursor = None
+            minimized = 0
+            while True:
+                result = self._request("POST", f"{GITHUB_API_BASE}/graphql", {
+                    "query": query,
+                    "variables": {"id": pr_node_id, "cursor": cursor},
+                })
+                if result.get("errors"):
+                    raise RuntimeError(result["errors"])
+                reviews = result["data"]["node"]["reviews"]
+                for review in reviews.get("nodes", []):
+                    if review.get("isMinimized"):
+                        continue
+                    db_id = review.get("databaseId")
+                    if keep_review_id is not None and db_id == keep_review_id:
+                        continue
+                    author_login = ((review.get("author") or {}).get("login") or "").lower()
+                    if author_login != username.lower():
+                        continue
+                    body = review.get("body") or ""
+                    # Only minimize bot's CodeRabbit reviews
+                    if "🐰" in body or "CodeRabbit" in body:
+                        min_res = self._request("POST", f"{GITHUB_API_BASE}/graphql", {
+                            "query": mutation,
+                            "variables": {"subjectId": review["id"]},
+                        })
+                        if min_res.get("errors"):
+                            logger.warning("Could not minimize review %s: %s", review["id"], min_res["errors"])
+                        else:
+                            minimized += 1
+                page_info = reviews.get("pageInfo", {})
+                if not page_info.get("hasNextPage"):
+                    break
+                cursor = page_info.get("endCursor")
+            return minimized
+        except Exception as e:
+            logger.warning("Could not minimize previous reviews on %s/%s PR #%s: %s", owner, repo, pr_number, e)
+            return 0
+
     def get_authenticated_user(self) -> Dict[str, Any]:
         """Gets profile for the authenticated GitHub user."""
         if not self._current_user:
@@ -278,7 +364,8 @@ class GitHubClient:
                 is_bot_author = bool(user and author.lower() == user.lower())
                 is_coderabbit_author = "coderabbit" in author.lower()
                 has_review_signature = (
-                    "🐰 **Automated CodeRabbit Review Completed**" in body or
+                    "## 🐰 CodeRabbit" in body or
+                    "🐰 **Automated CodeRabbit Review" in body or
                     "🐰 CodeRabbit Automated Review" in body or
                     "CodeRabbit Review Completed" in body or
                     "<!-- coderabbit-review-complete -->" in body
@@ -425,12 +512,12 @@ class GitHubClient:
             "user_review_state": user_review_state
         }
 
-    def find_bot_comment(self, owner: str, repo: str, pr_number: int, marker: str = "🐰 **Automated CodeRabbit Review") -> Optional[Dict[str, Any]]:
+    def find_bot_comment(self, owner: str, repo: str, pr_number: int, marker: str = "🐰 CodeRabbit") -> Optional[Dict[str, Any]]:
         """Finds existing bot status comment on an issue/PR to prevent duplicate spam."""
         comments = self.get_comments_for_pr(owner, repo, pr_number)
         for comment in comments:
             body = comment.get("body", "")
-            if marker in body:
+            if "## 🐰 CodeRabbit" in body or "🐰 **Automated CodeRabbit Review" in body or marker in body:
                 return comment
         return None
 
