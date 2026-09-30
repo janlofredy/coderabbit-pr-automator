@@ -54,6 +54,17 @@ class StateManager:
                         for k, v in defaults.items():
                             if k not in data:
                                 data[k] = v
+                        # Sanitize review_queue from potential duplicate accumulations
+                        if "review_queue" in data and isinstance(data["review_queue"], list):
+                            seen_keys = set()
+                            sanitized_queue = []
+                            for item in data["review_queue"]:
+                                if isinstance(item, dict) and "pr_key" in item:
+                                    k = item["pr_key"]
+                                    if k not in seen_keys:
+                                        seen_keys.add(k)
+                                        sanitized_queue.append(item)
+                            data["review_queue"] = sanitized_queue
                         return data
             except Exception as e:
                 logger.error("Error reading state file at %s: %s", self.state_path, e)
@@ -365,7 +376,15 @@ class StateManager:
         """Persists the review queue list to state storage."""
         with self._lock:
             state = self.load_state()
-            state["review_queue"] = list(queue_items)
+            seen_keys = set()
+            deduped = []
+            for item in queue_items:
+                if isinstance(item, dict) and "pr_key" in item:
+                    k = item["pr_key"]
+                    if k not in seen_keys:
+                        seen_keys.add(k)
+                        deduped.append(dict(item))
+            state["review_queue"] = deduped
             self.save_state(state)
 
     def enqueue_review_job(self, job_item: Dict[str, Any], to_front: bool = False) -> bool:

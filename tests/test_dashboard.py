@@ -392,6 +392,22 @@ class TestDashboardBackend(unittest.TestCase):
                 queue_state = review_service.get_review_queue()
                 self.assertTrue(any(item["pr_key"] == "owner/repo1#101" for item in queue_state["pending"]))
 
+    def test_queue_sync_no_duplicates_or_memory_leak(self):
+        """Repeated calls to _init_queue_from_state must not duplicate items or leak memory."""
+        review_service = self.backend.review_service
+        self.state_mgr.save_review_queue([
+            {"pr_key": "owner/repo1#101", "force": False},
+            {"pr_key": "owner/repo1#102", "force": False},
+        ])
+        # Call multiple times as background worker loop does every 10 seconds
+        for _ in range(10):
+            review_service._init_queue_from_state()
+
+        queue_state = review_service.get_review_queue()
+        self.assertEqual(len(queue_state["pending"]), 2)
+        pr_keys = [item["pr_key"] for item in queue_state["pending"]]
+        self.assertEqual(pr_keys, ["owner/repo1#101", "owner/repo1#102"])
+
 
     def test_move_queue_item_to_top(self):
         review_service = self.backend.review_service

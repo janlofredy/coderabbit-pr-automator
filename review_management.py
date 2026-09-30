@@ -49,13 +49,33 @@ class ReviewManagementService:
         self._init_queue_from_state()
 
     def _init_queue_from_state(self) -> None:
-        try:
-            persisted = self.state_manager.get_review_queue()
-            for item in persisted:
-                if isinstance(item, dict) and "pr_key" in item:
-                    self._review_queue.append(dict(item))
-        except Exception as e:
-            logger.warning("Could not restore persisted review queue: %s", e)
+        with self._scan_lock:
+            try:
+                persisted = self.state_manager.get_review_queue()
+                existing_keys = {
+                    item["pr_key"]
+                    for item in self._review_queue
+                    if isinstance(item, dict) and "pr_key" in item
+                }
+                if self._active_queue_item and isinstance(self._active_queue_item, dict):
+                    active_key = self._active_queue_item.get("pr_key")
+                    if active_key:
+                        existing_keys.add(active_key)
+
+                for item in persisted:
+                    if isinstance(item, dict) and "pr_key" in item:
+                        pr_key = item["pr_key"]
+                        if pr_key not in existing_keys:
+                            self._review_queue.append(dict(item))
+                            existing_keys.add(pr_key)
+                        elif item.get("force"):
+                            # Upgrade existing item force flag if persisted job was forced
+                            for existing in self._review_queue:
+                                if existing.get("pr_key") == pr_key:
+                                    existing["force"] = True
+                                    break
+            except Exception as e:
+                logger.warning("Could not restore persisted review queue: %s", e)
 
     def _sync_queue_to_state_locked(self) -> None:
         try:
