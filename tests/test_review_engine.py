@@ -353,6 +353,43 @@ Review complete. Detailed findings submitted directly to this pull request."""
             call_env = mock_run.call_args[1]["env"]
             self.assertEqual(call_env.get("HOME"), "/custom/profile/home")
 
+    def test_review_records_account_in_log_and_comment(self):
+        self.gh_client.get_username.return_value = "coderabbit-bot"
+        self.gh_client.has_user_reviewed_sha.return_value = (False, None)
+        self.gh_client.create_or_update_comment.return_value = {"id": 101}
+        self.gh_client.submit_pull_request_review.return_value = {"id": 202}
+        self.gh_client.resolve_previous_review_threads.return_value = 0
+
+        repo_info = {"full_name": "owner/repo", "path": os.path.join(self.repos_dir, "owner/repo")}
+        pr = {
+            "number": 1,
+            "title": "Feature 1",
+            "changed_files": 1,
+            "user": {"login": "contributor"},
+            "base": {"ref": "main"},
+            "head": {"ref": "feature", "sha": "1234567890abcdef"},
+            "html_url": "https://github.com/owner/repo/pull/1"
+        }
+        acc = {"id": "acc-dedicated", "name": "Dedicated Key Account", "type": "api_key", "api_key": "cr-123"}
+
+        with patch.object(self.engine, "prepare_repo", return_value=True), \
+             patch.object(self.engine, "checkout_pr", return_value=True), \
+             patch.object(self.engine, "count_changed_files", return_value=1), \
+             patch.object(self.engine, "execute_coderabbit_cli", return_value=(0, '{"findings": []}', "")):
+            res = self.engine.review_single_pr(repo_info, pr, account=acc)
+
+        self.assertEqual(res["status"], "COMPLETED")
+        self.assertEqual(res["coderabbit_account"], "Dedicated Key Account")
+
+        logs = self.state_mgr.get_pr_logs("owner/repo#1")
+        self.assertTrue(len(logs) > 0)
+        self.assertEqual(logs[0].get("coderabbit_account"), "Dedicated Key Account")
+        self.assertEqual(logs[0].get("account_id"), "acc-dedicated")
+
+        # Verify account was included in review_body submitted to GitHub
+        call_kwargs = self.gh_client.submit_pull_request_review.call_args[1]
+        self.assertIn("Dedicated Key Account", call_kwargs["body"])
+
 if __name__ == "__main__":
     unittest.main()
 

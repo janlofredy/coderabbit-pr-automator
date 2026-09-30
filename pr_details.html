@@ -605,7 +605,10 @@
                 <!-- Summary Section -->
                 <div>
                     <div class="section-heading">
-                        <span>Review Summary</span>
+                        <div style="display: flex; align-items: center; gap: 0.6rem;">
+                            <span>Review Summary</span>
+                            <span id="selected-run-account" class="badge badge-purple" style="display: none; font-size: 0.75rem; padding: 0.15rem 0.5rem;"></span>
+                        </div>
                         <span id="selected-run-timestamp" style="font-size: 0.8rem; color: var(--text-muted); font-weight: normal;"></span>
                     </div>
                     <div id="summary-content" class="summary-box" style="margin-top: 0.75rem;">
@@ -831,6 +834,8 @@
                 const badgeClass = isErr ? 'badge-red' : (outcome.includes('APPROVED') ? 'badge-green' : 'badge-yellow');
                 const activeClass = index === selectedRunIndex ? 'active' : '';
 
+                const accBadge = log.coderabbit_account ? `<span>👤 <strong>${escapeHtml(log.coderabbit_account)}</strong></span>` : '';
+
                 return `
                     <div class="run-item ${activeClass}" onclick="selectRun(${index})">
                         <div class="run-item-top">
@@ -841,6 +846,7 @@
                             <span>SHA: <code>${(log.head_sha || '').substring(0, 7) || 'N/A'}</code></span>
                             <span>⏱️ ${log.elapsed_seconds || 0}s</span>
                         </div>
+                        ${accBadge ? `<div class="run-item-details" style="margin-top: 0.25rem;">${accBadge}</div>` : ''}
                     </div>
                 `;
             }).join('');
@@ -855,6 +861,16 @@
         function renderSelectedRun() {
             const logs = currentPrData.logs || [];
             const log = logs[selectedRunIndex] || null;
+
+            const accEl = document.getElementById('selected-run-account');
+            if (accEl) {
+                if (log && log.coderabbit_account) {
+                    accEl.textContent = `Account: ${log.coderabbit_account}`;
+                    accEl.style.display = 'inline-flex';
+                } else {
+                    accEl.style.display = 'none';
+                }
+            }
 
             if (!log) {
                 document.getElementById('stat-outcome').textContent = currentPrData.pr.status_label || 'Pending Review';
@@ -905,7 +921,8 @@
             }
 
             // Terminal meta
-            document.getElementById('terminal-meta').textContent = `Exit Code: ${log.retcode ?? 0} | Head: ${(log.head_sha || '').substring(0, 7)}`;
+            const accMeta = log.coderabbit_account ? ` | Account: ${log.coderabbit_account}` : '';
+            document.getElementById('terminal-meta').textContent = `Exit Code: ${log.retcode ?? 0} | Head: ${(log.head_sha || '').substring(0, 7)}${accMeta}`;
 
             // Terminal Logs body
             updateTerminalBody();

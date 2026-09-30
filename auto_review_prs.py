@@ -569,8 +569,12 @@ class AutoReviewEngine:
             pr_key, True, attempt, "STARTING_REVIEW", "Starting CodeRabbit review"
         )
 
+        account_name = account.get("name") if account and account.get("name") else "Default (Global CLI)"
+        account_id = account.get("id") if account and account.get("id") else "default"
+
         in_progress_comment = f"""🐰 **Automated CodeRabbit Review In Progress**
 - **Reviewer**: @{auth_user or 'coderabbit-bot'}
+- **CodeRabbit Account**: `{account_name}`
 - **Target Base Branch**: `{base_ref}`
 - **Head Branch**: `{head_ref}` (`{head_sha[:8]}`)
 ---
@@ -581,7 +585,7 @@ class AutoReviewEngine:
 
         # Run CodeRabbit CLI
         self.state_manager.set_pr_reviewing(
-            pr_key, True, attempt, "RUNNING_CODERABBIT", "CodeRabbit is analyzing the pull request"
+            pr_key, True, attempt, "RUNNING_CODERABBIT", f"CodeRabbit ({account_name}) is analyzing the pull request"
         )
         start_time = time.time()
         retcode, stdout, stderr = self.execute_coderabbit_cli(repo_path, base_ref, account=account)
@@ -656,6 +660,8 @@ class AutoReviewEngine:
                 "pr_key": pr_key,
                 "status": "ERROR",
                 "error": stderr,
+                "coderabbit_account": account_name,
+                "account_id": account_id,
                 "head_sha": head_sha,
                 "title": pr.get("title", ""),
                 "html_url": pr.get("html_url", ""),
@@ -665,6 +671,8 @@ class AutoReviewEngine:
             self.state_manager.record_pr_log(pr_key, {
                 "status": "ERROR",
                 "review_outcome": "ERROR",
+                "coderabbit_account": account_name,
+                "account_id": account_id,
                 "retcode": retcode,
                 "elapsed_seconds": round(elapsed, 1),
                 "head_sha": head_sha,
@@ -689,6 +697,7 @@ class AutoReviewEngine:
             self.state_manager.set_pr_reviewing(pr_key, False)
             failure_comment = f"""🐰 **Automated CodeRabbit Review Failed**
 - **Reviewer**: @{auth_user or 'coderabbit-bot'}
+- **CodeRabbit Account**: `{account_name}`
 - **Head Branch**: `{head_ref}` (`{head_sha[:8]}`)
 ---
 > ❌ **Review result was incomplete or unreadable. No approval was submitted.**
@@ -696,10 +705,12 @@ class AutoReviewEngine:
 """
             self.github_client.create_or_update_comment(owner, repo_name, pr_number, failure_comment, comment_id)
             status_data = {"pr_key": pr_key, "status": "ERROR", "error": error_message, "head_sha": head_sha,
+                           "coderabbit_account": account_name, "account_id": account_id,
                            "title": pr.get("title", ""), "html_url": pr.get("html_url", ""),
                            "author": pr_author, "is_own_pr": is_own_pr}
             self.state_manager.record_pr_log(pr_key, {
                 "status": "ERROR", "review_outcome": "ERROR", "retcode": retcode,
+                "coderabbit_account": account_name, "account_id": account_id,
                 "elapsed_seconds": round(elapsed, 1), "head_sha": head_sha,
                 "base_ref": base_ref, "head_ref": head_ref, "author": pr_author,
                 "title": pr.get("title", ""), "html_url": pr.get("html_url", ""),
@@ -827,6 +838,7 @@ class AutoReviewEngine:
         review_body = f"""## 🐰 CodeRabbit Automated Review
 
 - **Review Outcome**: `{review_outcome}`
+- **Account**: `{account_name}`
 - **Files Modified**: {file_count}
 - **Critical / Major Issues**: {critical_major_count}
 - **Minor / Warning Issues**: {minor_count}
@@ -835,7 +847,7 @@ class AutoReviewEngine:
 {summary_text}
 """
         self.state_manager.set_pr_reviewing(
-            pr_key, True, attempt, "PUBLISHING_REVIEW", "Posting review and inline comments to GitHub"
+            pr_key, True, attempt, "PUBLISHING_REVIEW", f"Posting review ({account_name}) to GitHub"
         )
         try:
             submitted_review = self.github_client.submit_pull_request_review(
@@ -847,7 +859,7 @@ class AutoReviewEngine:
                 body=review_body,
                 comments=line_comments if line_comments else None
             )
-            logger.info("Submitted %s review on %s (PR #%s)", event, full_name, pr_number)
+            logger.info("Submitted %s review on %s (PR #%s) using account '%s'", event, full_name, pr_number, account_name)
             resolved_count = self.github_client.resolve_previous_review_threads(
                 owner,
                 repo_name,
@@ -861,11 +873,13 @@ class AutoReviewEngine:
             logger.error("Failed to submit PR review on %s: %s", pr_key, e)
             self.state_manager.set_pr_reviewing(pr_key, False)
             status_data = {"pr_key": pr_key, "status": "ERROR", "error": f"GitHub review submission failed: {e}",
+                           "coderabbit_account": account_name, "account_id": account_id,
                            "review_outcome": "ERROR", "head_sha": head_sha,
                            "title": pr.get("title", ""), "html_url": pr.get("html_url", ""),
                            "author": pr_author, "is_own_pr": is_own_pr}
             self.state_manager.record_pr_log(pr_key, {
                 "status": "ERROR", "review_outcome": "ERROR", "event": event,
+                "coderabbit_account": account_name, "account_id": account_id,
                 "retcode": retcode, "elapsed_seconds": round(elapsed, 1), "head_sha": head_sha,
                 "base_ref": base_ref, "head_ref": head_ref, "author": pr_author,
                 "title": pr.get("title", ""), "html_url": pr.get("html_url", ""),
@@ -875,6 +889,7 @@ class AutoReviewEngine:
             self.state_manager.record_pr_status(pr_key, status_data)
             failure_comment = f"""🐰 **Automated CodeRabbit Review Failed**
 - **Reviewer**: @{auth_user or 'coderabbit-bot'}
+- **CodeRabbit Account**: `{account_name}`
 - **Head Branch**: `{head_ref}` (`{head_sha[:8]}`)
 ---
 > ❌ **Analysis completed, but GitHub rejected the review submission.**
@@ -886,6 +901,7 @@ class AutoReviewEngine:
         # Update bot status comment to Completed
         completed_comment = f"""🐰 **Automated CodeRabbit Review Completed**
 - **Reviewer**: @{auth_user or 'coderabbit-bot'}
+- **CodeRabbit Account**: `{account_name}`
 - **Target Base Branch**: `{base_ref}`
 - **Head Branch**: `{head_ref}` (`{head_sha[:8]}`)
 - **Status**: {review_outcome} ({critical_major_count} critical/major, {minor_count} minor findings)
@@ -902,6 +918,8 @@ Review complete. Detailed findings submitted directly to this pull request.
             "pr_key": pr_key,
             "status": "COMPLETED",
             "review_outcome": review_outcome,
+            "coderabbit_account": account_name,
+            "account_id": account_id,
             "event": event,
             "findings_count": len(findings_list),
             "critical_major_count": critical_major_count,
@@ -917,6 +935,8 @@ Review complete. Detailed findings submitted directly to this pull request.
         self.state_manager.record_pr_log(pr_key, {
             "status": "COMPLETED",
             "review_outcome": review_outcome,
+            "coderabbit_account": account_name,
+            "account_id": account_id,
             "event": event,
             "findings_count": len(findings_list),
             "critical_major_count": critical_major_count,
