@@ -144,9 +144,10 @@ class AutoReviewEngine:
 
         return valid_lines
 
-    def execute_coderabbit_cli(self, repo_path: str, base_ref: str) -> Tuple[int, str, str]:
+    def execute_coderabbit_cli(self, repo_path: str, base_ref: str, account: Optional[Dict[str, Any]] = None) -> Tuple[int, str, str]:
         """
         Executes CodeRabbit CLI in agent mode.
+        If account is provided, configures credentials/profile for that account.
         Returns: (returncode, stdout, stderr)
         """
         cmd = ["coderabbit", "review", "--agent", "--base", base_ref]
@@ -164,9 +165,28 @@ class AutoReviewEngine:
                 break
 
         env = os.environ.copy()
-        # Authentication comes from the user's persisted CLI login mounted at
-        # the CLI home; do not silently switch to environment API-key auth.
-        env.pop("CODERABBIT_API_KEY", None)
+
+        # Account-based configuration
+        if account:
+            acc_type = account.get("type", "api_key")
+            region = account.get("region", "us")
+            if acc_type == "api_key" and account.get("api_key"):
+                cmd.extend(["--api-key", account["api_key"]])
+                if region:
+                    cmd.extend(["--region", region])
+                env["CODERABBIT_API_KEY"] = account["api_key"]
+                logger.info("Using CodeRabbit account '%s' (API key, region: %s)", account.get("name"), region)
+            elif acc_type == "profile" and account.get("profile_dir"):
+                p_dir = account["profile_dir"]
+                if os.path.isdir(p_dir):
+                    env["HOME"] = p_dir
+                    logger.info("Using CodeRabbit account '%s' (Profile dir: %s)", account.get("name"), p_dir)
+                else:
+                    logger.warning("Configured profile directory %s does not exist; using default environment", p_dir)
+        else:
+            # Authentication comes from default persisted CLI login mounted at CLI home
+            env.pop("CODERABBIT_API_KEY", None)
+
         logger.info("Executing CodeRabbit CLI: %s in %s", " ".join(cmd), repo_path)
 
         try:
@@ -394,7 +414,7 @@ class AutoReviewEngine:
 
         return filename
 
-    def review_single_pr(self, repo_info: Dict[str, Any], pr: Dict[str, Any], force: bool = False) -> Dict[str, Any]:
+    def review_single_pr(self, repo_info: Dict[str, Any], pr: Dict[str, Any], force: bool = False, account: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Executes the full review workflow for a single pull request.
         """
@@ -415,17 +435,42 @@ class AutoReviewEngine:
         auto_approve = config.get("auto_approve", True)
         strict_approval = config.get("strict_approval", True)
 
-        # Check rate limit cooldown unless force is requested
-        if not force:
-            is_rate_limited, remaining, reason = self.state_manager.is_rate_limit_active()
-            if is_rate_limited:
-                logger.info("Skipping review of %s: Rate limit cooldown active (%ds remaining)", pr_key, remaining)
+        accounts = config.get("coderabbit_accounts", [])
+        if account is None and accounts:
+            selection = self.state_manager.select_next_available_account(accounts)
+            if selection:
+                account = selection[0]
+            elif not force:
+                logger.info("All configured CodeRabbit accounts are currently on cooldown for %s", pr_key)
                 return {
                     "pr_key": pr_key,
                     "status": "RATE_LIMITED",
-                    "cooldown_remaining": remaining,
-                    "reason": reason
+                    "cooldown_remaining": 600,
+                    "reason": "All CodeRabbit accounts are in rate limit cooldown"
                 }
+
+        # Check rate limit cooldown unless force is requested
+        if not force:
+            if account and account.get("id"):
+                is_rl, remaining, reason = self.state_manager.is_account_rate_limited(account["id"])
+                if is_rl:
+                    logger.info("Skipping review of %s: Account '%s' rate limit active (%ds remaining)", pr_key, account.get("name"), remaining)
+                    return {
+                        "pr_key": pr_key,
+                        "status": "RATE_LIMITED",
+                        "cooldown_remaining": remaining,
+                        "reason": f"Account '{account.get('name')}' rate limit cooldown active"
+                    }
+            else:
+                is_rate_limited, remaining, reason = self.state_manager.is_rate_limit_active()
+                if is_rate_limited:
+                    logger.info("Skipping review of %s: Rate limit cooldown active (%ds remaining)", pr_key, remaining)
+                    return {
+                        "pr_key": pr_key,
+                        "status": "RATE_LIMITED",
+                        "cooldown_remaining": remaining,
+                        "reason": reason
+                    }
 
         # Check if already reviewed on this SHA
         review_check = self.github_client.has_user_reviewed_sha(owner, repo_name, pr_number, head_sha, auth_user)
@@ -539,7 +584,7 @@ class AutoReviewEngine:
             pr_key, True, attempt, "RUNNING_CODERABBIT", "CodeRabbit is analyzing the pull request"
         )
         start_time = time.time()
-        retcode, stdout, stderr = self.execute_coderabbit_cli(repo_path, base_ref)
+        retcode, stdout, stderr = self.execute_coderabbit_cli(repo_path, base_ref, account=account)
         elapsed = time.time() - start_time
         combined_output = f"{stdout}\n{stderr}"
 
@@ -554,7 +599,14 @@ class AutoReviewEngine:
             reason_msg = f"CLI execution timeout ({self.cli_timeout}s)" if is_timeout else "Free Tier request quota / rate limit reached"
 
             logger.warning("CodeRabbit rate limit or timeout triggered on %s: delay %ds (%s)", pr_key, delay_sec, reason_msg)
-            self.state_manager.record_rate_limit(delay_sec, reason_msg, pr_key)
+            if account and account.get("id"):
+                self.state_manager.record_account_rate_limit(account["id"], delay_sec, reason_msg)
+                # Only pause system-level if all accounts are now in rate limit
+                all_accounts = self.config_manager.get_coderabbit_accounts()
+                if not any(not self.state_manager.is_account_rate_limited(a["id"])[0] for a in all_accounts if a.get("enabled", True)):
+                    self.state_manager.record_rate_limit(delay_sec, reason_msg, pr_key)
+            else:
+                self.state_manager.record_rate_limit(delay_sec, reason_msg, pr_key)
             self.state_manager.set_pr_reviewing(pr_key, False)
 
             rate_limit_comment = f"""🐰 **Automated CodeRabbit Review In Progress**

@@ -205,8 +205,114 @@ class TestConfigAndStateManager(unittest.TestCase):
         self.assertEqual(loaded[1]["pr_key"], "owner/repo#2")
         self.assertTrue(loaded[1]["force"])
 
+    def test_coderabbit_accounts_crud(self):
+        mgr = ConfigManager(config_path=self.config_path, repos_base_dir=self.repos_dir)
+        self.assertEqual(mgr.get_coderabbit_accounts(), [])
+
+        # Add account
+        acc1 = mgr.add_coderabbit_account({
+            "name": "Account 1",
+            "type": "api_key",
+            "api_key": "cr-secret-1",
+            "region": "us"
+        })
+        self.assertEqual(acc1["name"], "Account 1")
+        self.assertEqual(acc1["api_key"], "cr-secret-1")
+        self.assertTrue(acc1["enabled"])
+
+        # Add second account with omitted profile_dir
+        acc2 = mgr.add_coderabbit_account({
+            "name": "Team Devs",
+            "type": "profile",
+            "region": "eu"
+        })
+        self.assertEqual(len(mgr.get_coderabbit_accounts()), 2)
+        self.assertTrue(os.path.isdir(acc2["profile_dir"]))
+        self.assertTrue(acc2["profile_dir"].endswith("team_devs"))
+
+        # Update account
+        updated = mgr.update_coderabbit_account(acc1["id"], {"name": "Account 1 Renamed", "enabled": False})
+        self.assertEqual(updated["name"], "Account 1 Renamed")
+        self.assertFalse(updated["enabled"])
+
+        # Remove account
+        removed = mgr.remove_coderabbit_account(acc1["id"])
+        self.assertTrue(removed)
+        accounts_left = mgr.get_coderabbit_accounts()
+        self.assertEqual(len(accounts_left), 1)
+        self.assertEqual(accounts_left[0]["id"], acc2["id"])
+
+    def test_account_rate_limiting_and_rotation(self):
+        sm = StateManager(state_path=self.state_path)
+        accounts = [
+            {"id": "acc-1", "name": "Account 1", "enabled": True},
+            {"id": "acc-2", "name": "Account 2", "enabled": True},
+            {"id": "acc-3", "name": "Account 3", "enabled": False},
+        ]
+
+        # Initial selection chooses first enabled
+        sel1 = sm.select_next_available_account(accounts)
+        self.assertIsNotNone(sel1)
+        self.assertEqual(sel1[0]["id"], "acc-1")
+
+        # Next selection rotates to second enabled
+        sel2 = sm.select_next_available_account(accounts)
+        self.assertIsNotNone(sel2)
+        self.assertEqual(sel2[0]["id"], "acc-2")
+
+        # Third selection wraps around to first enabled
+        sel3 = sm.select_next_available_account(accounts)
+        self.assertIsNotNone(sel3)
+        self.assertEqual(sel3[0]["id"], "acc-1")
+
+        # Rate limit acc-1
+        sm.record_account_rate_limit("acc-1", 300, reason="Quota reached")
+        is_rl, rem, reason = sm.is_account_rate_limited("acc-1")
+        self.assertTrue(is_rl)
+        self.assertGreater(rem, 200)
+
+        # Now selection must skip acc-1 and pick acc-2
+        sel_after_rl = sm.select_next_available_account(accounts)
+        self.assertIsNotNone(sel_after_rl)
+        self.assertEqual(sel_after_rl[0]["id"], "acc-2")
+
+        # Rate limit acc-2 as well
+        sm.record_account_rate_limit("acc-2", 300, reason="Quota reached")
+
+        # All enabled accounts are now rate-limited -> returns None
+        sel_all_rl = sm.select_next_available_account(accounts)
+        self.assertIsNone(sel_all_rl)
+
+        # Clear cooldown for acc-1
+        sm.clear_rate_limit("acc-1")
+        self.assertFalse(sm.is_account_rate_limited("acc-1")[0])
+        self.assertTrue(sm.is_account_rate_limited("acc-2")[0])
+
+        sel_recovered = sm.select_next_available_account(accounts)
+        self.assertIsNotNone(sel_recovered)
+        self.assertEqual(sel_recovered[0]["id"], "acc-1")
+
+    def test_profile_auto_discovery(self):
+        mgr = ConfigManager(config_path=self.config_path, repos_base_dir=self.repos_dir)
+        accounts_dir = mgr.get_accounts_dir()
+
+        # Simulate docker exec creating a profile directory with auth.json
+        profile_path = os.path.join(accounts_dir, "work_profile")
+        os.makedirs(profile_path, exist_ok=True)
+        with open(os.path.join(profile_path, "auth.json"), "w") as f:
+            f.write('{"authenticated": true}')
+
+        # get_coderabbit_accounts should discover it automatically
+        accounts = mgr.get_coderabbit_accounts()
+        self.assertEqual(len(accounts), 1)
+        self.assertEqual(accounts[0]["id"], "profile_work_profile")
+        self.assertEqual(accounts[0]["name"], "Work Profile")
+        self.assertEqual(accounts[0]["type"], "profile")
+        self.assertEqual(accounts[0]["profile_dir"], profile_path)
+
 if __name__ == "__main__":
     unittest.main()
+
 
 
 

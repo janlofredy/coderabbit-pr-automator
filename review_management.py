@@ -132,9 +132,31 @@ class ReviewManagementService:
                     continue
                 owner, repo_name = GitHubClient.split_repo(target["repo"])
                 full_pr = self.github_client.get_pr(owner, repo_name, target["number"])
-                res = self.review_engine.review_single_pr(repo_info, full_pr, force=item["force"])
-                if isinstance(res, dict) and res.get("status") == "RATE_LIMITED":
-                    was_rate_limited = True
+
+                # Try available accounts with automatic failover
+                accounts = self.config_manager.get_coderabbit_accounts()
+                res = None
+                if accounts:
+                    while True:
+                        selection = self.state_manager.select_next_available_account(accounts)
+                        if not selection:
+                            if not item["force"]:
+                                was_rate_limited = True
+                                res = {"status": "RATE_LIMITED", "reason": "All accounts on cooldown"}
+                            else:
+                                res = self.review_engine.review_single_pr(repo_info, full_pr, force=True)
+                            break
+                        account, _ = selection
+                        res = self.review_engine.review_single_pr(repo_info, full_pr, force=item["force"], account=account)
+                        if isinstance(res, dict) and res.get("status") == "RATE_LIMITED":
+                            # Account hit rate limit, check if any other account can try right away
+                            logger.info("Account '%s' hit rate limit on %s, checking if another account is available...", account.get("name"), item["pr_key"])
+                            continue
+                        break
+                else:
+                    res = self.review_engine.review_single_pr(repo_info, full_pr, force=item["force"])
+                    if isinstance(res, dict) and res.get("status") == "RATE_LIMITED":
+                        was_rate_limited = True
             except Exception as e:
                 logger.exception("Error reviewing queued PR %s", item["pr_key"])
                 item["error"] = str(e)

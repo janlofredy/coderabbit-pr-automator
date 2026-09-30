@@ -103,6 +103,57 @@ class DashboardBackend:
         """Compatibility facade; review scheduling lives in its service."""
         return self.review_service.run_review_scan(force=force, pr_key=pr_key)
 
+    def test_coderabbit_account_auth(self, account: Dict[str, Any]) -> Dict[str, Any]:
+        """Runs coderabbit auth status or a test review probe for a specific account."""
+        acc_type = account.get("type", "api_key")
+        env = os.environ.copy()
+        cmd = ["coderabbit", "auth", "status", "--agent"]
+
+        if acc_type == "api_key" and account.get("api_key"):
+            env["CODERABBIT_API_KEY"] = account["api_key"]
+            if account.get("region"):
+                cmd.extend(["--region", account["region"]])
+        elif acc_type == "profile" and account.get("profile_dir"):
+            p_dir = account["profile_dir"]
+            if os.path.isdir(p_dir):
+                env["HOME"] = p_dir
+            else:
+                return {"authenticated": False, "status": "directory_not_found", "message": f"Directory not found: {p_dir}"}
+        else:
+            env.pop("CODERABBIT_API_KEY", None)
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                env=env,
+                check=False,
+            )
+        except FileNotFoundError:
+            return {"authenticated": False, "status": "unavailable", "message": "CodeRabbit CLI not installed"}
+        except subprocess.TimeoutExpired:
+            return {"authenticated": False, "status": "timeout", "message": "Authentication check timed out"}
+
+        authenticated = False
+        status = "needs_auth"
+        for line in result.stdout.splitlines():
+            try:
+                event = json.loads(line)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(event, dict) and event.get("phase") == "auth":
+                if event.get("authenticated") is True:
+                    authenticated = True
+                    status = "authenticated"
+                elif event.get("authenticated") is False:
+                    authenticated = False
+                    status = "needs_auth"
+                break
+
+        return {"authenticated": authenticated, "status": status, "output": result.stdout.strip()}
+
     def get_coderabbit_auth_status(self) -> Dict[str, str]:
         """Return a sanitized, briefly cached status from the official CLI."""
         with self._auth_lock:
@@ -278,6 +329,21 @@ class DashboardBackend:
             "scan_phase": self.review_service.scan_phase,
             "repository_status": self.repository_service.get_status(),
             "review_queue": self.review_service.get_review_queue(),
+            "coderabbit_accounts": [
+                {
+                    "id": a.get("id"),
+                    "name": a.get("name"),
+                    "type": a.get("type", "api_key"),
+                    "region": a.get("region", "us"),
+                    "enabled": a.get("enabled", True),
+                    "profile_dir": a.get("profile_dir", ""),
+                    "api_key_masked": f"{a.get('api_key')[:4]}...{a.get('api_key')[-4:]}" if a.get("api_key") and len(a.get("api_key")) > 8 else ("configured" if a.get("api_key") else ""),
+                    "rate_limited": self.state_manager.is_account_rate_limited(a.get("id", ""))[0],
+                    "cooldown_remaining": self.state_manager.is_account_rate_limited(a.get("id", ""))[1],
+                }
+                for a in config.get("coderabbit_accounts", [])
+            ],
+            "account_rate_limits": self.state_manager.get_account_rate_limits(),
         }
 
     def get_pr_details(self, pr_key: str) -> Optional[Dict[str, Any]]:
@@ -434,6 +500,28 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(backend.get_coderabbit_auth_status()).encode("utf-8"))
             return
 
+        if path == "/api/coderabbit-accounts":
+            accounts = backend.config_manager.get_coderabbit_accounts()
+            safe_accounts = []
+            for a in accounts:
+                is_rl, rem, reason = backend.state_manager.is_account_rate_limited(a.get("id", ""))
+                safe_accounts.append({
+                    "id": a.get("id"),
+                    "name": a.get("name"),
+                    "type": a.get("type", "api_key"),
+                    "region": a.get("region", "us"),
+                    "enabled": a.get("enabled", True),
+                    "profile_dir": a.get("profile_dir", ""),
+                    "api_key_masked": f"{a.get('api_key')[:4]}...{a.get('api_key')[-4:]}" if a.get("api_key") and len(a.get("api_key")) > 8 else ("configured" if a.get("api_key") else ""),
+                    "has_key": bool(a.get("api_key")),
+                    "rate_limited": is_rl,
+                    "cooldown_remaining": rem,
+                    "rate_limit_reason": reason,
+                })
+            self._set_headers(200)
+            self.wfile.write(json.dumps(safe_accounts).encode("utf-8"))
+            return
+
 
         if path == "/api/repos":
             repos = backend.repository_service.get_repositories()
@@ -559,6 +647,64 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             backend.refresh_pr_cache()
             self._set_headers(200)
             self.wfile.write(json.dumps({"removed": removed}).encode("utf-8"))
+            return
+
+        if path == "/api/coderabbit-accounts/add":
+            account = backend.config_manager.add_coderabbit_account(data)
+            self._set_headers(200)
+            self.wfile.write(json.dumps(account).encode("utf-8"))
+            return
+
+        if path == "/api/coderabbit-accounts/update":
+            acc_id = data.get("id")
+            if not acc_id:
+                self._set_headers(400)
+                self.wfile.write(json.dumps({"error": "id is required"}).encode("utf-8"))
+                return
+            updated = backend.config_manager.update_coderabbit_account(acc_id, data)
+            if not updated:
+                self._set_headers(404)
+                self.wfile.write(json.dumps({"error": "Account not found"}).encode("utf-8"))
+                return
+            self._set_headers(200)
+            self.wfile.write(json.dumps(updated).encode("utf-8"))
+            return
+
+        if path == "/api/coderabbit-accounts/remove":
+            acc_id = data.get("id")
+            if not acc_id:
+                self._set_headers(400)
+                self.wfile.write(json.dumps({"error": "id is required"}).encode("utf-8"))
+                return
+            removed = backend.config_manager.remove_coderabbit_account(acc_id)
+            backend.state_manager.clear_rate_limit(acc_id)
+            self._set_headers(200)
+            self.wfile.write(json.dumps({"removed": removed, "id": acc_id}).encode("utf-8"))
+            return
+
+        if path == "/api/coderabbit-accounts/test":
+            acc_id = data.get("id")
+            target_account = None
+            if acc_id:
+                target_account = next((a for a in backend.config_manager.get_coderabbit_accounts() if a.get("id") == acc_id), None)
+            else:
+                target_account = data
+
+            if not target_account:
+                self._set_headers(404)
+                self.wfile.write(json.dumps({"error": "Account not found"}).encode("utf-8"))
+                return
+
+            result = backend.test_coderabbit_account_auth(target_account)
+            self._set_headers(200)
+            self.wfile.write(json.dumps(result).encode("utf-8"))
+            return
+
+        if path == "/api/coderabbit-accounts/clear-cooldown":
+            acc_id = data.get("id")
+            backend.state_manager.clear_rate_limit(acc_id)
+            self._set_headers(200)
+            self.wfile.write(json.dumps({"status": "cooldown_cleared", "id": acc_id}).encode("utf-8"))
             return
 
         self._set_headers(404, "text/plain")

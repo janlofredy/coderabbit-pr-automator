@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import logging
 import tempfile
@@ -88,6 +89,7 @@ class ConfigManager:
         strict_approval_env = str(strict_approval_val).lower() in ("true", "1", "yes") if strict_approval_val else True
         return {
             "repositories": repo_list,
+            "coderabbit_accounts": [],
             "poll_interval_seconds": poll_interval,
             "max_files_limit": max_files,
             "auto_approve": auto_approve_env,
@@ -263,3 +265,130 @@ class ConfigManager:
 
         self.save_config(cfg)
         return self.get_settings()
+
+    def get_accounts_dir(self) -> str:
+        """Returns the persistent directory for CodeRabbit account profiles."""
+        base_dir = os.path.dirname(os.path.abspath(self.config_path))
+        accounts_dir = os.path.join(base_dir, "accounts")
+        os.makedirs(accounts_dir, exist_ok=True)
+        return accounts_dir
+
+    def get_coderabbit_accounts(self) -> List[Dict[str, Any]]:
+        """
+        Returns configured CodeRabbit accounts, auto-discovering any profiles
+        created directly via CLI (e.g. docker exec) in the accounts directory.
+        """
+        cfg = self.load_config()
+        accounts = list(cfg.get("coderabbit_accounts", []))
+        accounts_dir = self.get_accounts_dir()
+
+        # Discover profile directories containing auth.json
+        discovered_modified = False
+        existing_ids = {a.get("id") for a in accounts}
+        existing_dirs = {os.path.abspath(a.get("profile_dir", "")) for a in accounts if a.get("type") == "profile"}
+
+        try:
+            if os.path.isdir(accounts_dir):
+                for entry in sorted(os.listdir(accounts_dir)):
+                    entry_path = os.path.join(accounts_dir, entry)
+                    if os.path.isdir(entry_path):
+                        # A profile directory might have auth.json directly or under .coderabbit/auth.json
+                        has_auth = os.path.isfile(os.path.join(entry_path, "auth.json")) or os.path.isfile(os.path.join(entry_path, ".coderabbit", "auth.json"))
+                        if has_auth and os.path.abspath(entry_path) not in existing_dirs:
+                            account_id = f"profile_{entry}"
+                            if account_id not in existing_ids:
+                                new_acc = {
+                                    "id": account_id,
+                                    "name": entry.replace("-", " ").replace("_", " ").title(),
+                                    "type": "profile",
+                                    "api_key": "",
+                                    "profile_dir": entry_path,
+                                    "region": "us",
+                                    "enabled": True,
+                                    "discovered": True
+                                }
+                                accounts.append(new_acc)
+                                existing_ids.add(account_id)
+                                existing_dirs.add(os.path.abspath(entry_path))
+                                discovered_modified = True
+        except Exception as e:
+            logger.warning("Error discovering CodeRabbit profiles in %s: %s", accounts_dir, e)
+
+        if discovered_modified:
+            cfg["coderabbit_accounts"] = accounts
+            self.save_config(cfg)
+
+        return accounts
+
+    def add_coderabbit_account(self, account: Dict[str, Any]) -> Dict[str, Any]:
+        """Adds a new CodeRabbit account to the configuration, automatically preparing profile folders."""
+        cfg = self.load_config()
+        accounts = cfg.get("coderabbit_accounts", [])
+
+        acc_id = account.get("id") or f"acc_{os.urandom(4).hex()}"
+        acc_type = account.get("type", "api_key")
+        name = account.get("name", "Account").strip() or "Account"
+        profile_dir = account.get("profile_dir", "").strip()
+
+        # If profile account and profile_dir not given, automatically construct and create it
+        if acc_type == "profile":
+            if not profile_dir:
+                safe_folder = re.sub(r'[^a-zA-Z0-9_-]', '_', name.lower()) or acc_id
+                profile_dir = os.path.join(self.get_accounts_dir(), safe_folder)
+            os.makedirs(profile_dir, exist_ok=True)
+
+        new_account = {
+            "id": acc_id,
+            "name": name,
+            "type": acc_type,
+            "api_key": account.get("api_key", "").strip(),
+            "profile_dir": profile_dir,
+            "region": account.get("region", "us").strip().lower() or "us",
+            "enabled": bool(account.get("enabled", True)),
+        }
+        accounts.append(new_account)
+        cfg["coderabbit_accounts"] = accounts
+        self.save_config(cfg)
+        return new_account
+
+    def update_coderabbit_account(self, account_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Updates an existing CodeRabbit account."""
+        cfg = self.load_config()
+        accounts = cfg.get("coderabbit_accounts", [])
+        target = None
+        for acc in accounts:
+            if acc.get("id") == account_id:
+                target = acc
+                break
+
+        if not target:
+            return None
+
+        if "name" in updates and str(updates["name"]).strip():
+            target["name"] = str(updates["name"]).strip()
+        if "type" in updates:
+            target["type"] = updates["type"]
+        if "api_key" in updates:
+            target["api_key"] = updates["api_key"].strip()
+        if "profile_dir" in updates:
+            target["profile_dir"] = updates["profile_dir"].strip()
+        if "region" in updates and updates["region"]:
+            target["region"] = updates["region"].strip().lower()
+        if "enabled" in updates:
+            target["enabled"] = bool(updates["enabled"])
+
+        cfg["coderabbit_accounts"] = accounts
+        self.save_config(cfg)
+        return target
+
+    def remove_coderabbit_account(self, account_id: str) -> bool:
+        """Removes a CodeRabbit account by ID."""
+        cfg = self.load_config()
+        accounts = cfg.get("coderabbit_accounts", [])
+        new_accounts = [acc for acc in accounts if acc.get("id") != account_id]
+        if len(new_accounts) != len(accounts):
+            cfg["coderabbit_accounts"] = new_accounts
+            self.save_config(cfg)
+            return True
+        return False
+

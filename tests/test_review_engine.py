@@ -331,5 +331,28 @@ Review complete. Detailed findings submitted directly to this pull request."""
             self.assertNotIn("--api-key", mock_run.call_args[0][0])
             self.assertNotIn("CODERABBIT_API_KEY", call_kwargs["env"])
 
+    def test_cli_uses_account_api_key_and_profile(self):
+        # 1. Test account with API key
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout='{"findings": []}', stderr="")
+            acc_api = {"id": "acc-1", "name": "Key Acc", "type": "api_key", "api_key": "cr-mykey123", "region": "eu"}
+            retcode, stdout, stderr = self.engine.execute_coderabbit_cli("/fake/path", "main", account=acc_api)
+            self.assertEqual(retcode, 0)
+            cmd_args = mock_run.call_args[0][0]
+            self.assertIn("--api-key", cmd_args)
+            self.assertIn("cr-mykey123", cmd_args)
+            self.assertIn("--region", cmd_args)
+            self.assertIn("eu", cmd_args)
+
+        # 2. Test account with profile dir
+        with patch("subprocess.run") as mock_run, patch("os.path.isdir", return_value=True):
+            mock_run.return_value = MagicMock(returncode=0, stdout='{"findings": []}', stderr="")
+            acc_prof = {"id": "acc-2", "name": "Profile Acc", "type": "profile", "profile_dir": "/custom/profile/home"}
+            retcode, stdout, stderr = self.engine.execute_coderabbit_cli("/fake/path", "main", account=acc_prof)
+            self.assertEqual(retcode, 0)
+            call_env = mock_run.call_args[1]["env"]
+            self.assertEqual(call_env.get("HOME"), "/custom/profile/home")
+
 if __name__ == "__main__":
     unittest.main()
+

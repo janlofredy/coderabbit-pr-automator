@@ -33,7 +33,9 @@ class StateManager:
             "active_reviews": {},
             "pr_statuses": {},
             "last_run_timestamp": "",
-            "review_queue": []
+            "review_queue": [],
+            "account_rate_limits": {},
+            "last_account_index": -1
         }
 
     def ensure_state_exists(self) -> None:
@@ -151,16 +153,105 @@ class StateManager:
         self.save_state(state)
         logger.warning("Rate limit recorded: %ds (reason: %s). Expires at %s", duration_seconds, reason, expires_at)
 
-    def clear_rate_limit(self) -> None:
-        """Clears active rate limit cooldown."""
+    def clear_rate_limit(self, account_id: Optional[str] = None) -> None:
+        """Clears active rate limit cooldown globally or for a specific account."""
         state = self.load_state()
-        state["rate_limited"] = False
-        state["rate_limit_expires_at"] = 0
-        state["rate_limit_reason"] = ""
-        state["rate_limit_retry_after_seconds"] = 0
-        state["rate_limit_set_at"] = 0
+        if account_id:
+            acc_limits = state.get("account_rate_limits", {})
+            if account_id in acc_limits:
+                del acc_limits[account_id]
+                state["account_rate_limits"] = acc_limits
+        else:
+            state["rate_limited"] = False
+            state["rate_limit_expires_at"] = 0
+            state["rate_limit_reason"] = ""
+            state["rate_limit_retry_after_seconds"] = 0
+            state["rate_limit_set_at"] = 0
+            state["account_rate_limits"] = {}
         self.save_state(state)
-        logger.info("Rate limit cleared.")
+        logger.info("Rate limit cleared%s.", f" for account {account_id}" if account_id else "")
+
+    def is_account_rate_limited(self, account_id: str) -> Tuple[bool, int, str]:
+        """Checks if a specific account is on rate limit cooldown."""
+        state = self.load_state()
+        acc_limits = state.get("account_rate_limits", {})
+        acc_state = acc_limits.get(account_id)
+        if not acc_state or not acc_state.get("rate_limited", False):
+            return False, 0, ""
+
+        expires_at = acc_state.get("expires_at", 0)
+        now = time.time()
+        remaining = int(expires_at - now)
+        if remaining <= 0:
+            self.clear_rate_limit(account_id)
+            return False, 0, ""
+        return True, remaining, acc_state.get("reason", "Account rate limit active")
+
+    def record_account_rate_limit(self, account_id: str, duration_seconds: int, reason: str = "Rate limit reached") -> None:
+        """Puts a specific account on rate limit cooldown."""
+        now = time.time()
+        duration_seconds = max(10, duration_seconds)
+        expires_at = now + duration_seconds
+
+        state = self.load_state()
+        if "account_rate_limits" not in state:
+            state["account_rate_limits"] = {}
+
+        state["account_rate_limits"][account_id] = {
+            "rate_limited": True,
+            "set_at": now,
+            "expires_at": expires_at,
+            "duration_seconds": duration_seconds,
+            "reason": reason
+        }
+        self.save_state(state)
+        logger.warning("Account %s rate limit recorded: %ds (reason: %s). Expires at %s", account_id, duration_seconds, reason, expires_at)
+
+    def get_account_rate_limits(self) -> Dict[str, Any]:
+        """Returns the dictionary of all active account rate limits."""
+        state = self.load_state()
+        raw = state.get("account_rate_limits", {})
+        cleaned = {}
+        now = time.time()
+        for acc_id, val in raw.items():
+            if val.get("rate_limited"):
+                rem = int(val.get("expires_at", 0) - now)
+                if rem > 0:
+                    cleaned[acc_id] = {**val, "remaining_seconds": rem}
+        return cleaned
+
+    def select_next_available_account(self, accounts: list) -> Optional[Tuple[Dict[str, Any], int]]:
+        """
+        Round-robin selection of next enabled account not currently in rate limit cooldown.
+        Returns: (account_dict, index) or None if all are rate-limited or none enabled.
+        """
+        enabled = [(i, acc) for i, acc in enumerate(accounts) if acc.get("enabled", True)]
+        if not enabled:
+            return None
+
+        state = self.load_state()
+        last_idx = state.get("last_account_index", -1)
+
+        # Try accounts starting after last_idx in round-robin fashion
+        total_enabled = len(enabled)
+        start_pos = 0
+        for pos, (orig_i, acc) in enumerate(enabled):
+            if orig_i > last_idx:
+                start_pos = pos
+                break
+
+        for step in range(total_enabled):
+            pos = (start_pos + step) % total_enabled
+            orig_i, acc = enabled[pos]
+            acc_id = acc.get("id", "")
+            is_rl, rem, _ = self.is_account_rate_limited(acc_id)
+            if not is_rl:
+                state["last_account_index"] = orig_i
+                self.save_state(state)
+                return acc, orig_i
+
+        return None
+
 
     def get_attempt_count(self, pr_key: str) -> int:
         state = self.load_state()

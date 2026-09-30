@@ -930,25 +930,161 @@
         </div>
     </div>
 
-    <!-- CodeRabbit CLI Authentication Instructions -->
+    <!-- CodeRabbit Accounts & Authentication Management Modal -->
     <div id="coderabbit-auth-modal" class="modal-overlay">
-        <div class="modal" style="max-width: 520px;">
+        <div class="modal" style="max-width: 680px; max-height: 90vh; display: flex; flex-direction: column;">
             <div class="modal-header">
-                <h3>🐰 CodeRabbit Auth Status</h3>
+                <h3>🐰 CodeRabbit Accounts & Authentication</h3>
                 <button class="modal-close-btn" onclick="closeCodeRabbitAuthInstructions()" title="Close">✕</button>
             </div>
-            <div id="coderabbit-auth-message" style="margin: 1rem 0;">Checking CLI status…</div>
-            <p style="color: var(--text-muted);">Google browser sign-in must run on the Docker host because CodeRabbit CLI browser OAuth is unavailable inside Docker/CI.</p>
-            <ol style="padding-left:1.4rem; line-height:1.7;">
-                <li>Open a terminal on the machine running Docker.</li>
-                <li>Install the CodeRabbit CLI there if needed.</li>
-                <li>Run <code>coderabbit auth login</code> and choose <strong>Continue with Google</strong> in the browser.</li>
-                <li>Verify with <code>coderabbit auth status</code>. The default Compose setup mounts that host's <code>~/.coderabbit</code> automatically.</li>
-            </ol>
-            <p>For CasaOS, authenticate on another machine, then copy the CLI state into <code>/DATA/AppData/coderabbit/coderabbit-cli</code>.</p>
-            <p>For headless API-key authentication, run <code>docker exec -it coderabbit-pr-automator coderabbit auth login --api-key "&lt;key&gt;"</code>. <a href="https://docs.coderabbit.ai/cli/reference" target="_blank" rel="noopener noreferrer">CLI auth reference</a></p>
-            <div style="display:flex; justify-content:flex-end; gap:0.5rem; margin-top:1.25rem;">
-                <button class="btn btn-sm" onclick="refreshCodeRabbitAuthStatus()">Refresh status</button>
+            
+            <div style="overflow-y: auto; padding-right: 0.25rem; display: flex; flex-direction: column; gap: 1.25rem;">
+                <!-- System Status Summary -->
+                <div style="display: flex; align-items: center; justify-content: space-between; padding: 0.75rem 1rem; border-radius: 8px; background: #162032; border: 1px solid var(--border-color);">
+                    <div>
+                        <div style="font-weight: 600; font-size: 0.9rem;" id="coderabbit-auth-summary-title">Default CLI Login</div>
+                        <small id="coderabbit-auth-message" style="color: var(--text-muted); font-size: 0.8rem;">Checking CLI status…</small>
+                    </div>
+                    <button class="btn btn-sm btn-secondary" onclick="refreshCodeRabbitAuthStatus()">🔄 Recheck</button>
+                </div>
+
+                <!-- Configured Accounts List -->
+                <div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                        <h4 style="margin: 0; font-size: 0.95rem; font-weight: 600;">Configured Accounts for Rotation</h4>
+                        <span id="account-count-badge" class="badge badge-purple" style="font-size: 0.75rem;">0 Accounts</span>
+                    </div>
+                    <p style="color: var(--text-muted); font-size: 0.8rem; margin-top: 0; margin-bottom: 0.75rem;">
+                        Add multiple accounts to bypass single-account free tier rate limits. Reviews rotate automatically across available accounts; if one account hits a limit, the review worker automatically fails over to the next.
+                    </p>
+
+                    <div id="coderabbit-accounts-list" style="display: flex; flex-direction: column; gap: 0.65rem; margin-bottom: 1rem;">
+                        <div style="font-size: 0.85rem; color: var(--text-muted); padding: 0.75rem; background: rgba(255,255,255,0.02); border-radius: 6px; border: 1px dashed rgba(255,255,255,0.1); text-align: center;">
+                            No additional accounts added yet. Using default host/container CLI login.
+                        </div>
+                    </div>
+
+                    <!-- Add Account Form Toggle -->
+                    <button id="btn-toggle-add-account" class="btn btn-sm btn-secondary" onclick="toggleAddAccountForm()" style="width: 100%; justify-content: center;">
+                        ➕ Add Another CodeRabbit Account
+                    </button>
+                    
+                    <div id="add-account-form" style="display: none; margin-top: 0.75rem; padding: 1rem; background: #1a2234; border-radius: 8px; border: 1px solid #1f2937;">
+                        <h5 style="margin-top: 0; margin-bottom: 0.75rem; font-size: 0.9rem;">New CodeRabbit Account</h5>
+                        
+                        <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+                            <div>
+                                <label style="display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.25rem;">Account Label / Name</label>
+                                <input type="text" id="new-acc-name" class="form-input" placeholder="e.g. Personal Account 2, Work Free Tier" style="width: 100%;" oninput="updateDockerLoginCommand()">
+                            </div>
+
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+                                <div>
+                                    <label style="display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.25rem;">Authentication Type</label>
+                                    <select id="new-acc-type" class="form-input" style="width: 100%;" onchange="onAccountTypeChange()">
+                                        <option value="api_key">API Key (Recommended - Headless)</option>
+                                        <option value="profile">OAuth Profile Directory (auth.json)</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style="display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.25rem;">Region</label>
+                                    <select id="new-acc-region" class="form-input" style="width: 100%;">
+                                        <option value="us">United States (US)</option>
+                                        <option value="eu">European Union (EU)</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div id="acc-field-api-key">
+                                <label style="display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.25rem;">CodeRabbit API Key</label>
+                                <input type="password" id="new-acc-api-key" class="form-input" placeholder="Paste CodeRabbit API Key..." style="width: 100%;">
+                                <small style="display: block; color: var(--text-muted); font-size: 0.72rem; margin-top: 0.25rem;">From your CodeRabbit Settings or <code>coderabbit auth login --api-key</code>.</small>
+                            </div>
+
+                            <div id="acc-field-profile-dir" style="display: none;">
+                                <div style="background: rgba(16, 185, 129, 0.09); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 8px; padding: 0.85rem 1rem; margin-bottom: 0.75rem; font-size: 0.8rem; line-height: 1.55;">
+                                    <div style="font-weight: 700; color: #6ee7b7; margin-bottom: 0.4rem; display: flex; align-items: center; justify-content: space-between;">
+                                        <span>📋 1-Step Login: Run via Docker CLI</span>
+                                        <span class="badge badge-green" style="font-size: 0.7rem;">Auto-Managed Folder</span>
+                                    </div>
+                                    <div style="color: var(--text-muted); margin-bottom: 0.5rem;">
+                                        The profile directory is automatically generated. Simply copy and run this command in your terminal, then complete login in your browser:
+                                    </div>
+                                    <div style="background: #0b1120; border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 0.5rem 0.75rem; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;">
+                                        <code id="docker-login-cmd-preview" style="color: #38bdf8; font-size: 0.76rem; word-break: break-all; flex: 1;">docker exec -it coderabbit-pr-automator sh -c 'HOME=/app/data/config/accounts/account2 coderabbit auth login'</code>
+                                        <button type="button" class="btn btn-sm btn-primary" style="padding: 0.2rem 0.6rem; font-size: 0.72rem; flex-shrink: 0;" onclick="copyDockerLoginCommand()">📋 Copy Command</button>
+                                    </div>
+                                    <div style="margin-top: 0.5rem; font-size: 0.75rem; color: #94a3b8;">
+                                        ✨ The folder is automatically created and tracked under <code id="auto-folder-preview">/app/data/config/accounts/account2</code>.
+                                    </div>
+                                </div>
+                                <input type="hidden" id="new-acc-profile-dir" value="">
+                            </div>
+
+                            <div style="display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.5rem;">
+                                <button class="btn btn-sm btn-secondary" onclick="toggleAddAccountForm()">Cancel</button>
+                                <button class="btn btn-sm btn-primary" onclick="submitAddAccount()">Save Account</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Step-by-Step Instructions by Authentication Type -->
+                <div style="border-top: 1px solid var(--border-color); padding-top: 1rem;">
+                    <h4 style="margin: 0 0 0.5rem 0; font-size: 0.95rem; font-weight: 600;">📖 How to Set Up Each Authentication Type</h4>
+                    
+                    <div style="display: flex; flex-direction: column; gap: 0.75rem; font-size: 0.82rem; line-height: 1.55;">
+                        <!-- Method 1: Docker CLI OAuth Login -->
+                        <div style="background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: 8px; padding: 0.85rem 1rem;">
+                            <div style="font-weight: 700; color: #a7f3d0; margin-bottom: 0.35rem; display: flex; align-items: center; justify-content: space-between;">
+                                <span>Method 1: Direct Docker CLI Login (OAuth / Google / GitHub)</span>
+                                <span class="badge badge-green" style="font-size: 0.7rem;">Docker CLI</span>
+                            </div>
+                            <ol style="padding-left: 1.25rem; margin: 0; color: var(--text-muted); display: flex; flex-direction: column; gap: 0.35rem;">
+                                <li>
+                                    Open your terminal and run the Docker command directly (replace <code>account2</code> with any name):
+                                    <pre style="margin: 0.35rem 0; background: #0f172a; padding: 0.5rem 0.75rem; border-radius: 5px; color: #38bdf8; font-size: 0.78rem; overflow-x: auto;"><code>docker exec -it coderabbit-pr-automator sh -c 'HOME=/app/data/config/accounts/account2 coderabbit auth login'</code></pre>
+                                </li>
+                                <li>
+                                    The CLI will print an OAuth URL or prompt for login. Complete sign-in in your browser with your secondary Google/GitHub account.
+                                </li>
+                                <li>
+                                    The profile credentials are saved directly into persistent container storage (<code>/app/data/config/accounts/account2</code>).
+                                </li>
+                                <li>
+                                    Click <strong>🔄 Recheck</strong> above — the dashboard <strong>auto-discovers</strong> the new profile account and adds it into rotation automatically!
+                                </li>
+                            </ol>
+                        </div>
+
+                        <!-- Method 2: API Key -->
+                        <div style="background: rgba(99, 102, 241, 0.08); border: 1px solid rgba(99, 102, 241, 0.25); border-radius: 8px; padding: 0.85rem 1rem;">
+                            <div style="font-weight: 700; color: #c7d2fe; margin-bottom: 0.35rem; display: flex; align-items: center; justify-content: space-between;">
+                                <span>Method 2: CodeRabbit API Key (Direct UI / Headless)</span>
+                                <span class="badge badge-purple" style="font-size: 0.7rem;">Headless</span>
+                            </div>
+                            <ol style="padding-left: 1.25rem; margin: 0; color: var(--text-muted); display: flex; flex-direction: column; gap: 0.25rem;">
+                                <li>Log in to <a href="https://coderabbit.ai" target="_blank" rel="noopener noreferrer" style="color: #93c5fd; text-decoration: underline;">CodeRabbit.ai</a> in your browser with your desired account.</li>
+                                <li>In settings, generate an <strong>Agentic / CLI API Key</strong>.</li>
+                                <li>Click <strong>Add Another CodeRabbit Account</strong> above, paste the API key, select your region, and save.</li>
+                                <li>You can test the credentials immediately with the <strong>Test</strong> button on the account card!</li>
+                            </ol>
+                        </div>
+
+                        <!-- Method 3: Default Host Mount -->
+                        <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px; padding: 0.85rem 1rem;">
+                            <div style="font-weight: 700; color: #e2e8f0; margin-bottom: 0.35rem;">
+                                Method 3: Default Host Login (Automatic Fallback)
+                            </div>
+                            <p style="margin: 0; color: var(--text-muted);">
+                                If no additional accounts are configured, the service uses the default <code>~/.coderabbit</code> directory mounted at container startup (or <code>/DATA/AppData/coderabbit/coderabbit-cli</code> in CasaOS).
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div style="display:flex; justify-content:flex-end; gap:0.5rem; margin-top:1rem; border-top:1px solid var(--border-color); padding-top:1rem;">
                 <button class="btn btn-secondary btn-sm" onclick="closeCodeRabbitAuthInstructions()">Close</button>
             </div>
         </div>
@@ -1807,6 +1943,247 @@
         }
 
         /* Settings Modal */
+    let coderabbitAccountsList = [];
+
+    async function loadCoderabbitAccounts() {
+        try {
+            const res = await fetch('/api/coderabbit-accounts');
+            const accounts = await res.json();
+            coderabbitAccountsList = accounts;
+            renderCoderabbitAccountsList(accounts);
+        } catch (e) {
+            console.error('Error loading CodeRabbit accounts:', e);
+        }
+    }
+
+    function renderCoderabbitAccountsList(accounts) {
+        const container = document.getElementById('coderabbit-accounts-list');
+        const badge = document.getElementById('account-count-badge');
+        if (badge) {
+            const activeCount = accounts.filter(a => a.enabled && !a.rate_limited).length;
+            badge.textContent = `${activeCount}/${accounts.length} Ready`;
+            badge.className = activeCount > 0 ? 'badge badge-green' : (accounts.length > 0 ? 'badge badge-yellow' : 'badge badge-gray');
+        }
+
+        if (!container) return;
+        if (!accounts || accounts.length === 0) {
+            container.innerHTML = `
+                <div style="font-size: 0.85rem; color: var(--text-muted); padding: 0.75rem; background: rgba(255,255,255,0.02); border-radius: 6px; border: 1px dashed rgba(255,255,255,0.1); text-align: center;">
+                    No additional accounts added yet. Using default host/container CLI login.
+                </div>
+            `;
+            return;
+        }
+
+        container.innerHTML = accounts.map(acc => {
+            const isRL = acc.rate_limited;
+            const cooldownMins = Math.max(1, Math.round((acc.cooldown_remaining || 0) / 60));
+            const statusBadge = isRL
+                ? `<span class="badge badge-yellow" title="${escapeHtml(acc.rate_limit_reason || 'Rate limited')}">⏳ Cooldown (${cooldownMins}m)</span>`
+                : (acc.enabled ? `<span class="badge badge-green">🟢 Active</span>` : `<span class="badge badge-gray">⏸ Disabled</span>`);
+
+            const typeLabel = acc.type === 'profile'
+                ? `📁 Profile Dir: <code>${escapeHtml(acc.profile_dir || '')}</code>`
+                : `🔑 API Key (${acc.region ? acc.region.toUpperCase() : 'US'}): <code>${escapeHtml(acc.api_key_masked || 'configured')}</code>`;
+
+            return `
+                <div style="display: flex; flex-direction: column; gap: 0.4rem; padding: 0.75rem; background: #1a2234; border: 1px solid #1f2937; border-radius: 6px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <strong style="font-size: 0.9rem;">${escapeHtml(acc.name)}</strong>
+                            ${statusBadge}
+                        </div>
+                        <div style="display: flex; gap: 0.4rem;">
+                            ${isRL ? `<button class="btn btn-sm btn-warning" style="padding: 0.15rem 0.5rem; font-size: 0.72rem;" onclick="clearAccountCooldown('${acc.id}')" title="Clear Cooldown">⚡ Clear</button>` : ''}
+                            <button class="btn btn-sm" style="padding: 0.15rem 0.5rem; font-size: 0.72rem;" onclick="testAccount('${acc.id}', this)" title="Test authentication with CodeRabbit CLI">🧪 Test</button>
+                            <button class="btn btn-sm ${acc.enabled ? 'btn-secondary' : 'btn-primary'}" style="padding: 0.15rem 0.5rem; font-size: 0.72rem;" onclick="toggleAccountEnabled('${acc.id}', ${!acc.enabled})">
+                                ${acc.enabled ? 'Pause' : 'Enable'}
+                            </button>
+                            <button class="btn btn-sm btn-danger" style="padding: 0.15rem 0.5rem; font-size: 0.72rem;" onclick="removeAccount('${acc.id}')" title="Delete account">🗑</button>
+                        </div>
+                    </div>
+                    <div style="font-size: 0.76rem; color: var(--text-muted);">
+                        ${typeLabel}
+                    </div>
+                    <div id="acc-test-result-${acc.id}" style="display: none; font-size: 0.75rem; padding: 0.35rem 0.5rem; border-radius: 4px; margin-top: 0.2rem;"></div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    function toggleAddAccountForm() {
+        const form = document.getElementById('add-account-form');
+        const btn = document.getElementById('btn-toggle-add-account');
+        if (!form) return;
+        const isHidden = form.style.display === 'none';
+        form.style.display = isHidden ? 'block' : 'none';
+        btn.textContent = isHidden ? '✕ Close Form' : '➕ Add Another CodeRabbit Account';
+    }
+
+    function onAccountTypeChange() {
+        const type = document.getElementById('new-acc-type').value;
+        document.getElementById('acc-field-api-key').style.display = type === 'api_key' ? 'block' : 'none';
+        document.getElementById('acc-field-profile-dir').style.display = type === 'profile' ? 'block' : 'none';
+        updateDockerLoginCommand();
+    }
+
+    function updateDockerLoginCommand() {
+        const rawName = document.getElementById('new-acc-name').value.trim() || 'account2';
+        const cleanName = rawName.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+        const cmdEl = document.getElementById('docker-login-cmd-preview');
+        const folderPreviewEl = document.getElementById('auto-folder-preview');
+        const profileInput = document.getElementById('new-acc-profile-dir');
+        const path = `/app/data/config/accounts/${cleanName}`;
+        if (cmdEl) {
+            cmdEl.textContent = `docker exec -it coderabbit-pr-automator sh -c 'HOME=${path} coderabbit auth login'`;
+        }
+        if (folderPreviewEl) {
+            folderPreviewEl.textContent = path;
+        }
+        if (profileInput) {
+            profileInput.value = path;
+        }
+    }
+
+    function copyDockerLoginCommand() {
+        const cmdEl = document.getElementById('docker-login-cmd-preview');
+        if (cmdEl) {
+            navigator.clipboard.writeText(cmdEl.textContent.trim()).then(() => {
+                showToast('Docker CLI command copied to clipboard!', 'success');
+            }).catch(() => {
+                showToast('Could not copy to clipboard; please select and copy manually.', 'info');
+            });
+        }
+    }
+
+    async function submitAddAccount() {
+        const name = document.getElementById('new-acc-name').value.trim();
+        const type = document.getElementById('new-acc-type').value;
+        const region = document.getElementById('new-acc-region').value;
+        const apiKey = document.getElementById('new-acc-api-key').value.trim();
+        let profileDir = document.getElementById('new-acc-profile-dir').value.trim();
+
+        if (!name) {
+            showToast('Please provide an account label or name.', 'warning');
+            return;
+        }
+
+        if (type === 'api_key' && !apiKey) {
+            showToast('Please provide a CodeRabbit API key.', 'warning');
+            return;
+        }
+
+        if (type === 'profile' && !profileDir) {
+            const cleanName = name.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+            profileDir = `/app/data/config/accounts/${cleanName}`;
+        }
+
+        const payload = {
+            name: name,
+            type: type,
+            region: region,
+            api_key: apiKey,
+            profile_dir: profileDir,
+            enabled: true
+        };
+
+        try {
+            const res = await fetch('/api/coderabbit-accounts/add', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (!res.ok) throw new Error('Failed to add account');
+            showToast(`Added CodeRabbit account '${name}'!`, 'success');
+            document.getElementById('new-acc-name').value = '';
+            document.getElementById('new-acc-api-key').value = '';
+            document.getElementById('new-acc-profile-dir').value = '';
+            toggleAddAccountForm();
+            await loadCoderabbitAccounts();
+        } catch (e) {
+            showToast(e.message || 'Error saving account', 'error');
+        }
+    }
+
+    async function removeAccount(id) {
+        if (!confirm('Are you sure you want to remove this CodeRabbit account?')) return;
+        try {
+            const res = await fetch('/api/coderabbit-accounts/remove', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: id })
+            });
+            if (!res.ok) throw new Error('Failed to remove account');
+            showToast('Account removed from rotation.', 'info');
+            await loadCoderabbitAccounts();
+        } catch (e) {
+            showToast(e.message || 'Error removing account', 'error');
+        }
+    }
+
+    async function toggleAccountEnabled(id, enabled) {
+        try {
+            const res = await fetch('/api/coderabbit-accounts/update', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: id, enabled: enabled })
+            });
+            if (!res.ok) throw new Error('Failed to update account');
+            await loadCoderabbitAccounts();
+        } catch (e) {
+            showToast(e.message || 'Error updating account', 'error');
+        }
+    }
+
+    async function clearAccountCooldown(id) {
+        try {
+            const res = await fetch('/api/coderabbit-accounts/clear-cooldown', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: id })
+            });
+            if (!res.ok) throw new Error('Failed to clear cooldown');
+            showToast('Rate limit cooldown cleared for account!', 'success');
+            await loadCoderabbitAccounts();
+        } catch (e) {
+            showToast(e.message || 'Error clearing cooldown', 'error');
+        }
+    }
+
+    async function testAccount(id, btn) {
+        const resultEl = document.getElementById(`acc-test-result-${id}`);
+        setButtonLoading(btn, true, '<span class="spinner"></span>Testing...');
+        try {
+            const res = await fetch('/api/coderabbit-accounts/test', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: id })
+            });
+            const data = await res.json();
+            if (resultEl) {
+                resultEl.style.display = 'block';
+                if (data.authenticated) {
+                    resultEl.style.background = 'rgba(16, 185, 129, 0.15)';
+                    resultEl.style.color = '#34d399';
+                    resultEl.innerHTML = '✅ Authenticated successfully! Ready for reviews.';
+                } else {
+                    resultEl.style.background = 'rgba(239, 68, 68, 0.15)';
+                    resultEl.style.color = '#f87171';
+                    resultEl.innerHTML = `❌ Auth Check Failed: ${escapeHtml(data.message || data.status || 'Authentication invalid')}`;
+                }
+            }
+        } catch (e) {
+            if (resultEl) {
+                resultEl.style.display = 'block';
+                resultEl.style.background = 'rgba(239, 68, 68, 0.15)';
+                resultEl.style.color = '#f87171';
+                resultEl.innerHTML = `❌ Error: ${escapeHtml(e.message)}`;
+            }
+        } finally {
+            setButtonLoading(btn, false);
+        }
+    }
+
     async function refreshCodeRabbitAuthStatus() {
         try {
             const response = await fetch('/api/coderabbit-auth');
@@ -1815,7 +2192,7 @@
             if (pill) {
                 if (state.status === 'authenticated') {
                     pill.textContent = '🐰';
-                    pill.title = 'CodeRabbit CLI: Connected & Authenticated (Click for details)';
+                    pill.title = 'CodeRabbit CLI: Connected & Authenticated (Click for accounts & details)';
                 } else if (state.status === 'needs_auth') {
                     pill.textContent = '🔒';
                     pill.title = 'CodeRabbit CLI: Login required (Click for instructions)';
@@ -1827,10 +2204,10 @@
             const message = document.getElementById('coderabbit-auth-message');
             if (message) {
                 message.textContent = state.status === 'authenticated'
-                    ? 'Connected. The CodeRabbit CLI reports an active login.'
+                    ? 'Connected. The CodeRabbit CLI reports an active default login.'
                     : state.status === 'needs_auth'
-                        ? 'No active CodeRabbit CLI login was found.'
-                        : 'Could not read CodeRabbit CLI auth status.';
+                        ? 'No active default CLI login was found (Add an account below).'
+                        : 'Could not read default CodeRabbit CLI auth status.';
             }
         } catch (_) {
             const pill = document.getElementById('coderabbit-auth-pill');
@@ -1839,6 +2216,7 @@
                 pill.title = 'CodeRabbit CLI: Status check failed (Click for instructions)';
             }
         }
+        await loadCoderabbitAccounts();
     }
     function openCodeRabbitAuthInstructions() {
         document.getElementById('coderabbit-auth-modal').classList.add('active');

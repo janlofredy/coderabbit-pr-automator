@@ -6,7 +6,7 @@ echo "  🐰 CodeRabbit PR Auto-Reviewer for CasaOS & Docker"
 echo "=========================================================="
 
 # Ensure directories exist
-mkdir -p /app/data/config /app/data/reviews /app/data/repos
+mkdir -p /app/data/config/accounts /app/data/reviews /app/data/repos
 mkdir -p /app/repos
 
 # Keep CodeRabbit's home on persistent storage. CasaOS mounts /app/data and

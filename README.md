@@ -99,14 +99,29 @@ Access the dashboard at `http://localhost:8765`.
 ### 1. GitHub Authentication
 Open **Settings** in the dashboard and enter a GitHub Personal Access Token with repository access (`repo` for private repositories or `public_repo` for public repositories). The token is saved in the persistent configuration storage with owner-only file permissions and is never returned by the settings API. Existing `GITHUB_TOKEN` environment values are automatically migrated there on startup.
 
-### 2. CodeRabbit Authentication
-The CodeRabbit CLI disables browser OAuth inside Docker/CI. Run `coderabbit auth login` on the Docker host, choose **Continue with Google** in the browser, and verify with `coderabbit auth status`. The default Compose file mounts the host's `~/.coderabbit` directory directly into the container, so no copy is needed. If `CODERABBIT_CLI_HOME` points to a different host path, copy the authenticated `.coderabbit` contents there. EU users can run `coderabbit auth login --region eu` on the host.
+### 2. CodeRabbit Authentication & Multi-Account Support
 
-The CasaOS compose file uses one storage mount, `/DATA/AppData/coderabbit:/app/data`. Inside it, app settings are stored under `config`, review reports under `reviews`, repository checkouts under `repos`, and CodeRabbit CLI credentials under `coderabbit-cli`. The container links `/root/.coderabbit` to this persistent directory, so credentials survive image/container updates. Authenticate with `coderabbit auth login` on a machine with a browser, then securely copy that machine's `.coderabbit` directory contents to `/DATA/AppData/coderabbit/coderabbit-cli/`. Keep the CLI state private; it contains login credentials.
+To maximize review throughput and avoid being stopped by free tier rate limits (e.g. 429 backoffs or quota ceilings), CodeRabbit PR Auto-Reviewer supports **Multiple CodeRabbit Accounts** with automated round-robin rotation and failure-fallback.
 
-Before upgrading an existing CasaOS container created by an older release, preserve any login stored only in the old container with `mkdir -p /DATA/AppData/coderabbit/coderabbit-cli && docker cp coderabbit-pr-automator:/root/.coderabbit/. /DATA/AppData/coderabbit/coderabbit-cli/`. Do this while the old container is still running; after container replacement, files from its writable layer cannot be recovered.
+You can manage accounts directly in the Web Dashboard by clicking the **🐰 CodeRabbit icon** in the top navigation bar:
 
-The dashboard header shows the current CodeRabbit CLI auth status. Click the status bar for these instructions. For headless or bot-driven authentication, use an Agentic API key with `coderabbit auth login --api-key "<key>"`; see the [CLI auth reference](https://docs.coderabbit.ai/cli/reference).
+#### Method A: CodeRabbit API Key (Recommended & Headless)
+1. Log in to [CodeRabbit.ai](https://coderabbit.ai) with your desired account.
+2. In user or organization settings, generate a **CLI / Agent API Key**.
+3. In the Web Dashboard modal, click **Add Another CodeRabbit Account**, choose **API Key**, specify your region (`US` or `EU`), and paste the key.
+4. Click **Test** to immediately verify that the CLI can authenticate with that account.
+
+#### Method B: Direct Docker CLI Login (OAuth / Google / GitHub)
+You don't need to copy files between machines or manually enter folder paths. Simply run the login command directly inside the Docker container with an isolated home directory (replace `account2` with whatever profile name you want):
+```bash
+docker exec -it coderabbit-pr-automator sh -c 'HOME=/app/data/config/accounts/account2 coderabbit auth login'
+```
+1. Follow the link printed in the terminal to complete Google/GitHub OAuth authentication in your browser.
+2. The credentials are saved straight to persistent container storage under `/app/data/config/accounts/account2`.
+3. Open the Web Dashboard and click **🔄 Recheck** — the system **auto-discovers** the new profile account and adds it into rotation automatically!
+
+#### Method C: Default Host Mount (Automatic Fallback)
+If no accounts are configured in the dashboard, the application automatically uses the mounted host CLI credentials located at `~/.coderabbit` (or `/DATA/AppData/coderabbit/coderabbit-cli` in CasaOS).
 
 ---
 
@@ -117,7 +132,7 @@ The dashboard header shows the current CodeRabbit CLI auth status. Click the sta
 | `GITHUB_TOKEN` | Legacy GitHub token automatically migrated to persistent settings; new setups should use the dashboard Settings | Optional |
 | `CODERABBIT_CLI_HOME` | Host path containing the authenticated CodeRabbit CLI state mounted by Docker Compose | `${HOME}/.coderabbit` |
 
-> 💡 **Note**: Repository settings, polling intervals, max file limits, auto-approvals, and strict approval mode are persisted in the app's mounted data directory and can be changed live from the Web Dashboard without recreating or restarting the container. CodeRabbit authentication is managed by the CLI, outside the dashboard.
+> 💡 **Note**: Repository settings, polling intervals, max file limits, auto-approvals, strict approval mode, and CodeRabbit multi-account configurations are persisted in the app's mounted data directory and can be changed live from the Web Dashboard without recreating or restarting the container.
 
 ---
 
@@ -125,8 +140,14 @@ The dashboard header shows the current CodeRabbit CLI auth status. Click the sta
 
 | Endpoint | Method | Description |
 | :--- | :--- | :--- |
-| `/api/status` | `GET` | Returns aggregated status, active rate limits, strict approval mode, PR list, and active/waiting review queue items |
-| `/api/coderabbit-auth` | `GET` | Returns the current CodeRabbit CLI authentication status |
+| `/api/status` | `GET` | Returns aggregated status, active rate limits, strict approval mode, PR list, review queue items, and account rotation statuses |
+| `/api/coderabbit-auth` | `GET` | Returns the default CodeRabbit CLI authentication status |
+| `/api/coderabbit-accounts` | `GET` | Returns all configured CodeRabbit accounts with masked credentials, active states, and cooldowns |
+| `/api/coderabbit-accounts/add` | `POST` | Adds a new CodeRabbit account (`name`, `type`, `api_key` or `profile_dir`, `region`) |
+| `/api/coderabbit-accounts/update` | `POST` | Updates an existing account (`id`, `name`, `enabled`, etc.) |
+| `/api/coderabbit-accounts/remove` | `POST` | Deletes a CodeRabbit account (`id`) |
+| `/api/coderabbit-accounts/test` | `POST` | Probes CodeRabbit CLI authentication for an account |
+| `/api/coderabbit-accounts/clear-cooldown` | `POST` | Clears rate limit cooldown for a specific account (`id`) |
 | `/api/config` | `GET` | Returns runtime operational settings (`poll_interval_seconds`, `max_files_limit`, etc.) |
 | `/api/config` | `POST` | Updates runtime operational settings in `config.json` live |
 | `/api/strict-approval/toggle` | `POST` | Toggles strict approval mode on/off |
@@ -135,7 +156,7 @@ The dashboard header shows the current CodeRabbit CLI auth status. Click the sta
 | `/api/repos/add` | `POST` | Adds and validates repository: `{"full_name": "owner/repo"}` |
 | `/api/repos/remove` | `POST` | Removes repository: `{"full_name": "owner/repo"}` |
 | `/api/trigger` | `POST` | Starts a full scan, or queues a selected PR: `{"force": false, "pr_key": "owner/repo#1"}` |
-| `/api/clear-rate-limit` | `POST` | Clears active rate limit cooldown |
+| `/api/clear-rate-limit` | `POST` | Clears active rate limit cooldown globally |
 | `/api/service/toggle` | `POST` | Pauses or resumes background review worker |
 | `/reports/<file>` | `GET` | Serves generated HTML review reports |
 

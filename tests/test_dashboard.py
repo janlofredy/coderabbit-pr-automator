@@ -403,6 +403,32 @@ class TestDashboardBackend(unittest.TestCase):
             self.assertTrue(review_service.move_queue_item_to_top("owner/repo1#103"))
 
 
+    def test_coderabbit_accounts_status_and_testing(self):
+        # Configure test accounts
+        self.cfg_mgr.add_coderabbit_account({
+            "name": "Account API",
+            "type": "api_key",
+            "api_key": "cr-testkey123",
+            "region": "us"
+        })
+
+        status = self.backend.get_annotated_status()
+        self.assertIn("coderabbit_accounts", status)
+        self.assertEqual(len(status["coderabbit_accounts"]), 1)
+        acc = status["coderabbit_accounts"][0]
+        self.assertEqual(acc["name"], "Account API")
+        self.assertIn("cr-t...y123", acc["api_key_masked"])
+
+        # Test auth tester method
+        with unittest.mock.patch("subprocess.run") as mock_run:
+            mock_run.return_value = unittest.mock.MagicMock(
+                returncode=0,
+                stdout='{"type":"status","phase":"auth","status":"authenticated","authenticated":true}'
+            )
+            res = self.backend.test_coderabbit_account_auth(acc)
+            self.assertTrue(res["authenticated"])
+            self.assertEqual(res["status"], "authenticated")
+
 if __name__ == "__main__":
     unittest.main()
 
