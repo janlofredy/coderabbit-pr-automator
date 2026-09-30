@@ -67,6 +67,42 @@
             gap: 0.75rem;
         }
 
+        .header-status-bar {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            background: rgba(255, 255, 255, 0.04);
+            padding: 0.25rem 0.5rem;
+            border-radius: 9999px;
+            border: 1px solid var(--border-color);
+        }
+
+        .status-icon-pill {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            font-size: 0.95rem;
+            line-height: 1;
+            padding: 0;
+            cursor: default;
+            transition: all 0.15s ease-in-out;
+            user-select: none;
+            background: transparent;
+            border: 1px solid transparent;
+        }
+
+        .status-icon-pill.clickable {
+            cursor: pointer;
+        }
+
+        .status-icon-pill.clickable:hover {
+            transform: scale(1.1);
+            background: rgba(255, 255, 255, 0.08);
+        }
+
         .btn {
             background-color: var(--surface-hover);
             color: var(--text-main);
@@ -521,11 +557,12 @@
             <span>CodeRabbit Auto-Reviewer</span>
         </div>
         <div class="header-actions">
-            <span id="service-status-pill" class="badge badge-green" title="Auto-Review Service Status">🟢 Running</span>
-            <span id="github-auth-pill" class="badge badge-gray" title="GitHub Authentication Status">🐙 Checking…</span>
-            <button id="coderabbit-auth-pill" class="badge badge-gray" type="button" onclick="openCodeRabbitAuthInstructions()" title="CodeRabbit CLI Status (Click for instructions)" style="cursor:pointer;font:inherit;">🐰 Checking…</button>
-            <span id="strict-mode-pill" class="badge badge-purple" title="Strict Mode: PRs with any minor issue are not approved">STRICT: ON</span>
-            <button id="global-rate-limit-pill" class="badge badge-orange" style="display:none; cursor:pointer;" onclick="clearRateLimit(this)" title="CodeRabbit Rate Limit active. Click to clear cooldown.">⏳ Rate Limited</button>
+            <div class="header-status-bar" title="System Status Indicators">
+                <span id="service-status-pill" class="status-icon-pill" title="Auto-Review Service: Running">🟢</span>
+                <span id="github-auth-pill" class="status-icon-pill" title="GitHub Authentication Status: Checking…">🐙</span>
+                <button id="coderabbit-auth-pill" class="status-icon-pill clickable" type="button" onclick="openCodeRabbitAuthInstructions()" title="CodeRabbit CLI: Checking… (Click for instructions)">🐰</button>
+                <button id="global-rate-limit-pill" class="status-icon-pill clickable" style="display:none;" onclick="clearRateLimit(this)" title="CodeRabbit Rate Limit active. Click to clear cooldown.">⏳</button>
+            </div>
             <button id="btn-settings" class="btn btn-sm" onclick="openSettingsModal()">⚙️ Settings</button>
             <button id="btn-scan-now" class="btn btn-primary btn-sm" onclick="triggerScan(false)">▶ Run Scan Now</button>
         </div>
@@ -764,43 +801,39 @@
         }
 
         function renderDashboard(data) {
-            // Service Status
+            // Service Status (Emoji only)
             const pill = document.getElementById('service-status-pill');
             const toggleBtn = document.getElementById('btn-toggle-service');
             const serviceDesc = document.getElementById('service-control-desc');
             if (data.service_enabled) {
                 if (pill) {
-                    pill.className = "badge badge-green";
-                    pill.textContent = "🟢 Running";
-                    pill.title = "Auto-Review Service is active and monitoring repositories.";
+                    pill.textContent = "🟢";
+                    pill.title = "Auto-Review Service: Running (Monitoring repositories)";
                 }
                 if (toggleBtn) toggleBtn.textContent = "Pause Service";
                 if (serviceDesc) serviceDesc.textContent = "Currently active and scanning repositories.";
             } else {
                 if (pill) {
-                    pill.className = "badge badge-gray";
-                    pill.textContent = "⏸️ Paused";
-                    pill.title = "Auto-Review Service is paused.";
+                    pill.textContent = "⏸️";
+                    pill.title = "Auto-Review Service: Paused";
                 }
                 if (toggleBtn) toggleBtn.textContent = "Resume Service";
                 if (serviceDesc) serviceDesc.textContent = "Service is paused. Background checks are halted.";
             }
 
-            // GitHub Authentication Status
+            // GitHub Authentication Status (Emoji only)
             const ghPill = document.getElementById('github-auth-pill');
             if (ghPill) {
                 if (data.authenticated_user) {
-                    ghPill.className = "badge badge-green";
-                    ghPill.textContent = `🐙 Connected (@${data.authenticated_user})`;
-                    ghPill.title = `GitHub Token active for @${data.authenticated_user}`;
+                    ghPill.textContent = "🐙";
+                    ghPill.title = `GitHub: Connected (@${data.authenticated_user})`;
                 } else {
-                    ghPill.className = "badge badge-yellow";
-                    ghPill.textContent = "🐙 Disconnected";
-                    ghPill.title = "No valid GitHub token configured. Enter a token in Settings.";
+                    ghPill.textContent = "🐙";
+                    ghPill.title = "GitHub: Disconnected (No token configured in Settings)";
                 }
             }
 
-            // Global CodeRabbit Rate Limit Indicator
+            // Global CodeRabbit Rate Limit Indicator (Emoji only with countdown in tooltip)
             const rateLimitPill = document.getElementById('global-rate-limit-pill');
             if (rateLimitPill) {
                 if (data.rate_limited) {
@@ -809,9 +842,8 @@
                     const seconds = remainingSec % 60;
                     const timeStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
                     rateLimitPill.style.display = "inline-flex";
-                    rateLimitPill.className = "badge badge-orange";
-                    rateLimitPill.textContent = `⏳ Rate Limited (${timeStr})`;
-                    rateLimitPill.title = `CodeRabbit rate limit active (${data.rate_limit_reason || 'Quota exceeded'}). Click to reset cooldown.`;
+                    rateLimitPill.textContent = "⏳";
+                    rateLimitPill.title = `Rate Limited: ${timeStr} remaining (${data.rate_limit_reason || 'Quota exceeded'}). Click to clear cooldown.`;
                 } else {
                     rateLimitPill.style.display = "none";
                 }
@@ -822,21 +854,6 @@
             if (repoDesc && data.repositories) {
                 const activeCount = data.repositories.filter(r => r.enabled).length;
                 repoDesc.textContent = `${activeCount} active repository${activeCount === 1 ? '' : 'ies'} of ${data.repositories.length} total.`;
-            }
-
-            // Strict Approval Mode
-            const strictPill = document.getElementById('strict-mode-pill');
-            const strictBtn = document.getElementById('btn-toggle-strict');
-            if (strictPill && strictBtn) {
-                if (data.strict_approval) {
-                    strictPill.className = "badge badge-purple";
-                    strictPill.textContent = "STRICT: ON";
-                    strictBtn.textContent = "Strict: ON";
-                } else {
-                    strictPill.className = "badge badge-gray";
-                    strictPill.textContent = "STRICT: OFF";
-                    strictBtn.textContent = "Strict: OFF";
-                }
             }
 
             // Stats
@@ -1279,18 +1296,15 @@
             const response = await fetch('/api/coderabbit-auth');
             const state = await response.json();
             const pill = document.getElementById('coderabbit-auth-pill');
-            if (state.status === 'authenticated') {
-                pill.className = 'badge badge-green';
-                pill.textContent = '🐰 Connected';
-                pill.title = 'CodeRabbit CLI: Connected and authenticated. Click for details.';
-            } else if (state.status === 'needs_auth') {
-                pill.className = 'badge badge-yellow';
-                pill.textContent = '🐰 Needs Login';
-                pill.title = 'CodeRabbit CLI: Login required. Click to view instructions.';
-            } else {
-                pill.className = 'badge badge-gray';
-                pill.textContent = '🐰 Disconnected';
-                pill.title = 'CodeRabbit CLI: Unavailable or not found. Click for instructions.';
+            if (pill) {
+                pill.textContent = '🐰';
+                if (state.status === 'authenticated') {
+                    pill.title = 'CodeRabbit CLI: Connected & Authenticated (Click for details)';
+                } else if (state.status === 'needs_auth') {
+                    pill.title = 'CodeRabbit CLI: Login required (Click for instructions)';
+                } else {
+                    pill.title = 'CodeRabbit CLI: Unavailable or not logged in (Click for instructions)';
+                }
             }
             const message = document.getElementById('coderabbit-auth-message');
             if (message) {
@@ -1302,9 +1316,10 @@
             }
         } catch (_) {
             const pill = document.getElementById('coderabbit-auth-pill');
-            pill.className = 'badge badge-gray';
-            pill.textContent = '🐰 Disconnected';
-            pill.title = 'CodeRabbit CLI: Could not check status. Click for instructions.';
+            if (pill) {
+                pill.textContent = '🐰';
+                pill.title = 'CodeRabbit CLI: Status check failed (Click for instructions)';
+            }
         }
     }
     function openCodeRabbitAuthInstructions() {
