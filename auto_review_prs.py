@@ -231,6 +231,112 @@ class AutoReviewEngine:
             logger.error("CodeRabbit CLI binary 'coderabbit' not found in PATH")
             return 127, "", "CodeRabbit CLI ('coderabbit') is not installed or not in PATH"
 
+    @staticmethod
+    def extract_line_and_range(f: Dict[str, Any]) -> Tuple[Optional[int], Optional[int]]:
+        """Extract start and end line numbers from finding attributes or embedded instructions."""
+        # 1. Direct dict keys
+        for key in ("line", "lineNumber", "line_number", "startLine", "start_line"):
+            val = f.get(key)
+            if val is not None:
+                try:
+                    line_int = int(val)
+                    end_val = f.get("endLine") or f.get("end_line") or line_int
+                    return line_int, int(end_val)
+                except (ValueError, TypeError):
+                    pass
+
+        # 2. Nested range dicts
+        for range_key in ("lineRange", "line_range", "range"):
+            r = f.get(range_key)
+            if isinstance(r, dict):
+                start = r.get("start")
+                end = r.get("end")
+                if isinstance(start, dict):
+                    start = start.get("line")
+                if isinstance(end, dict):
+                    end = end.get("line")
+                if start is not None:
+                    try:
+                        start_int = int(start)
+                        end_int = int(end) if end is not None else start_int
+                        return start_int, end_int
+                    except (ValueError, TypeError):
+                        pass
+
+        # 3. Text fields inspection (e.g. codegenInstructions, comment, message, description, title)
+        for text_key in ("codegenInstructions", "comment", "message", "description", "title"):
+            text = f.get(text_key)
+            if not text or not isinstance(text, str):
+                continue
+
+            # "Review comment at @file at line 16:" or "In @file at line 16," or "... around lines 22 - 30"
+            m = re.search(r"(?:Review comment at|In)\s+@[^\s:,]+\s+(?:around\s+)?lines?\s+(\d+)(?:\s*(?:-|to)\s*(\d+))?", text, re.IGNORECASE)
+            if not m:
+                # "at line 16", "on line 16", "around lines 22 - 30", "around line 16"
+                m = re.search(r"(?:at|on|around)\s+lines?\s+(\d+)(?:\s*(?:-|to)\s*(\d+))?", text, re.IGNORECASE)
+            if not m:
+                # "lines 22 - 30", "line 16:"
+                m = re.search(r"\blines?\s+(\d+)(?:\s*(?:-|to)\s*(\d+))?", text, re.IGNORECASE)
+            if not m:
+                # "file.ts:16" or "@file.ts:16"
+                m = re.search(r"(?:^|[\s@])[a-zA-Z0-9_./\\-]+\.[a-zA-Z0-9]+:(\d+)(?::\d+)?", text)
+
+            if m:
+                start = int(m.group(1))
+                end = int(m.group(2)) if len(m.groups()) >= 2 and m.group(2) else start
+                return start, end
+
+        return None, None
+
+    @staticmethod
+    def extract_file_path(f: Dict[str, Any]) -> str:
+        """Extract sanitized file path from finding attributes or embedded instructions."""
+        for key in ("file", "path", "fileName", "file_name", "filepath"):
+            val = f.get(key)
+            if val and isinstance(val, str):
+                clean = val.strip().removeprefix("./").removeprefix("@").lstrip("/")
+                if clean:
+                    return clean
+
+        for text_key in ("codegenInstructions", "comment", "message", "description"):
+            text = f.get(text_key)
+            if not text or not isinstance(text, str):
+                continue
+            m = re.search(r"(?:Review comment at|In)\s+@([^\s:,]+)", text)
+            if m:
+                clean = m.group(1).strip().removeprefix("./").removeprefix("@").lstrip("/")
+                if clean:
+                    return clean
+
+        return ""
+
+    @classmethod
+    def normalize_finding(cls, f: Dict[str, Any]) -> Dict[str, Any]:
+        """Ensures a finding has normalized file, line, and message properties."""
+        if not isinstance(f, dict):
+            return f
+        item = dict(f)
+        file_path = cls.extract_file_path(item)
+        if file_path:
+            item.setdefault("file", file_path)
+            item.setdefault("fileName", file_path)
+            item.setdefault("path", file_path)
+
+        start_line, end_line = cls.extract_line_and_range(item)
+        if start_line is not None:
+            item["line"] = start_line
+            item.setdefault("startLine", start_line)
+            item.setdefault("endLine", end_line if end_line is not None else start_line)
+            if "lineRange" not in item and "line_range" not in item:
+                item["lineRange"] = {"start": start_line, "end": end_line if end_line is not None else start_line}
+
+        msg = (item.get("comment") or item.get("codegenInstructions") or item.get("message")
+               or item.get("description") or "")
+        if msg and not item.get("message"):
+            item["message"] = msg
+
+        return item
+
     def parse_coderabbit_output(self, stdout: str) -> Dict[str, Any]:
         """Parse JSON and line-oriented agent events without inventing clean results."""
         if not stdout.strip():
@@ -244,14 +350,17 @@ class AutoReviewEngine:
                 raw_findings = data.get("findings")
                 if not isinstance(raw_findings, (list, dict)):
                     raise ValueError("JSON result is missing a findings list")
-                findings_count = len(raw_findings)
+                raw_list = list(raw_findings.values()) if isinstance(raw_findings, dict) else raw_findings
+                norm_findings = [self.normalize_finding(f) for f in raw_list if isinstance(f, dict)]
+                findings_count = len(norm_findings)
                 logger.info("Parsed CodeRabbit JSON output: %d findings", findings_count)
                 status = str(data.get("status", "")).lower()
                 valid = status not in ("failed", "error", "incomplete", "awaiting_confirmation", "review_skipped")
-                return {**data, "valid": valid, "completed": valid, "completion_status": status}
+                return {**data, "findings": norm_findings, "valid": valid, "completed": valid, "completion_status": status}
             elif isinstance(data, list):
                 logger.info("Parsed CodeRabbit JSON array output: %d items", len(data))
-                return {"findings": data, "summary": "CodeRabbit review completed", "valid": True, "completed": True}
+                norm_findings = [self.normalize_finding(f) for f in data if isinstance(f, dict)]
+                return {"findings": norm_findings, "summary": "CodeRabbit review completed", "valid": True, "completed": True}
         except (json.JSONDecodeError, ValueError):
             pass
 
@@ -260,11 +369,15 @@ class AutoReviewEngine:
             try:
                 data = json.loads(match.group(1))
                 if isinstance(data, dict) and isinstance(data.get("findings"), (list, dict)):
+                    raw_findings = data.get("findings")
+                    raw_list = list(raw_findings.values()) if isinstance(raw_findings, dict) else raw_findings
+                    norm_findings = [self.normalize_finding(f) for f in raw_list if isinstance(f, dict)]
                     status = str(data.get("status", "")).lower()
                     valid = status not in ("failed", "error", "incomplete", "awaiting_confirmation", "review_skipped")
-                    return {**data, "valid": valid, "completed": valid, "completion_status": status}
+                    return {**data, "findings": norm_findings, "valid": valid, "completed": valid, "completion_status": status}
                 if isinstance(data, list):
-                    return {"findings": data, "summary": "CodeRabbit review completed", "valid": True, "completed": True}
+                    norm_findings = [self.normalize_finding(f) for f in data if isinstance(f, dict)]
+                    return {"findings": norm_findings, "summary": "CodeRabbit review completed", "valid": True, "completed": True}
             except json.JSONDecodeError:
                 continue
 
@@ -293,12 +406,12 @@ class AutoReviewEngine:
                     if not finding:
                         finding = {k: v for k, v in event.items() if k not in ("type", "event", "data", "payload")}
                     if isinstance(finding, dict):
-                        findings.append(finding)
+                        findings.append(self.normalize_finding(finding))
                 elif event_type in ("complete", "completed", "review_complete"):
                     completion = {**payload, **event}
                     completed_findings = event.get("findings", payload.get("findings"))
                     if isinstance(completed_findings, list):
-                        findings.extend(f for f in completed_findings if isinstance(f, dict))
+                        findings.extend(self.normalize_finding(f) for f in completed_findings if isinstance(f, dict))
                     summary = event.get("summary", payload.get("summary"))
                     if isinstance(summary, str) and summary:
                         summaries.append(summary)
@@ -343,6 +456,8 @@ class AutoReviewEngine:
 
         findings_html = ""
         for idx, f in enumerate(findings, 1):
+            if isinstance(f, dict):
+                f = self.normalize_finding(f)
             severity = f.get("severity", "INFO").upper()
             color = "#ef4444" if severity in ("CRITICAL", "MAJOR", "ERROR") else ("#f59e0b" if severity in ("WARNING", "WARN") else "#3b82f6")
             file_path = f.get("file", f.get("path", "unknown"))
@@ -741,11 +856,13 @@ class AutoReviewEngine:
             if not isinstance(f, dict):
                 continue
 
+            f = self.normalize_finding(f)
+
             file_path = f.get("file") or f.get("path") or f.get("fileName") or ""
-            file_path = str(file_path).removeprefix("./") if file_path else ""
-            line_no = next((f[key] for key in ("line", "lineNumber", "line_number", "startLine")
-                            if f.get(key) is not None), None)
+            file_path = str(file_path).removeprefix("./").removeprefix("@").lstrip("/") if file_path else ""
+            line_no = f.get("line")
             has_reported_line = line_no is not None
+            end_line = f.get("endLine") or line_no
             severity = str(f.get("severity", "INFO")).upper()
             msg = (f.get("comment") or f.get("codegenInstructions") or f.get("message")
                    or f.get("description") or str(f))
@@ -764,31 +881,51 @@ class AutoReviewEngine:
                 findings_without_changed_lines += 1
                 continue
 
-            if line_no is None:
-                # CodeRabbit's documented agent finding schema identifies the file
-                # but does not include a line. Anchor these findings to a changed
-                # line so GitHub can render them inline, and label the anchor.
-                line_no = min(changed_lines)
-                line_less_findings += 1
+            candidate_line = None
+            anchored_outside_diff = False
 
             if line_no is not None:
                 try:
                     line_int = int(line_no)
+                    end_int = int(end_line) if end_line is not None else line_int
                     if line_int in changed_lines:
-                        comment_body = f"🐰 **CodeRabbit [{severity}]**: {msg}"
-                        if not has_reported_line:
-                            comment_body = (
-                                "📄 File-level finding; anchored to the first changed line because "
-                                "the CLI did not provide a line number.\n\n" + comment_body
-                            )
-                        line_comments.append({
-                            "path": file_path,
-                            "line": line_int,
-                            "side": "RIGHT",
-                            "body": comment_body
-                        })
+                        candidate_line = line_int
+                    elif end_int > line_int:
+                        for l in range(line_int, end_int + 1):
+                            if l in changed_lines:
+                                candidate_line = l
+                                break
+                    if candidate_line is None:
+                        # Finding reported a specific line outside the changed diff.
+                        # Anchor to the closest changed line so the review comment isn't lost.
+                        candidate_line = min(changed_lines, key=lambda l: abs(l - line_int))
+                        anchored_outside_diff = True
                 except (ValueError, TypeError):
                     pass
+
+            if candidate_line is None:
+                # No line was reported in the finding at all (file-level finding).
+                candidate_line = min(changed_lines)
+                line_less_findings += 1
+
+            comment_body = f"🐰 **CodeRabbit [{severity}]**: {msg}"
+            if not has_reported_line:
+                comment_body = (
+                    "📄 File-level finding; anchored to the first changed line because "
+                    "the CLI did not provide a line number.\n\n" + comment_body
+                )
+            elif anchored_outside_diff:
+                comment_body = (
+                    f"📄 Finding originally targeted line {line_no} (outside changed lines in this PR); "
+                    f"anchored to line {candidate_line}.\n\n" + comment_body
+                )
+
+            line_comments.append({
+                "path": file_path,
+                "line": candidate_line,
+                "side": "RIGHT",
+                "body": comment_body
+            })
 
         logger.info(
             "Mapped %d of %d CodeRabbit findings to inline comments on %s (line-less=%d, missing-file=%d, no-changed-lines=%d)",
