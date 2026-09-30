@@ -175,7 +175,7 @@ class TestReviewEngine(unittest.TestCase):
         # Second call should be the rate-limit PATCH
         rate_limit_call = comment_calls[-1]
         body = rate_limit_call[0][3]
-        self.assertIn("CodeRabbit Free Tier Rate Limit Active", body)
+        self.assertIn("Free Tier request quota / rate limit reached", body)
         self.assertIn("Will retry in", body)
         self.assertIn("Attempt**: 1 of 3", body)
 

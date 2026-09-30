@@ -743,37 +743,68 @@
             renderSelectedRun();
         }
 
+        function getBotReviewStatus(pr, status) {
+            // Priority 1: Ongoing Review
+            if (pr.status_badge === 'REVIEW_IN_PROGRESS' || pr.status_badge === 'RATE_LIMITED') {
+                return { class: 'badge-blue', text: '⚡ Bot Ongoing Review' };
+            }
+            // Priority 2: Changes Requested
+            if (status.review_outcome === 'CHANGES_REQUESTED' || (status.review_outcome && status.review_outcome.includes('CHANGES_REQUESTED')) || pr.bot_review_outcome === 'CHANGES_REQUESTED' || pr.status_badge === 'OTHER_CHANGES_REQUESTED') {
+                return { class: 'badge-red', text: '❌ Bot Changes Requested' };
+            }
+            // Priority 3: Approved
+            if (pr.has_user_auto_approved || pr.status_badge === 'APPROVED' || pr.bot_review_outcome === 'APPROVED' || status.review_outcome === 'APPROVED') {
+                return { class: 'badge-green', text: '🤖 Bot Approved' };
+            }
+            // Priority 4: Failed / Skipped
+            if (pr.status_badge === 'REVIEW_FAILED') {
+                return { class: 'badge-red', text: '❌ Review Failed' };
+            }
+            if (pr.status_badge === 'SKIPPED_MAX_FILES') {
+                return { class: 'badge-red', text: `🛑 ${pr.status_label || 'Skipped (>100 Files)'}` };
+            }
+            // Priority 5: Default Pending Review
+            return { class: 'badge-gray', text: '⏳ Bot Pending Review' };
+        }
+
         function renderStatusPills(pr, status) {
             const container = document.getElementById('pr-status-pills');
             const pills = [];
 
-            if (pr.status_badge === 'REVIEW_IN_PROGRESS') {
-                pills.push(`<span class="badge badge-blue">⚡ ${escapeHtml(pr.status_label || 'Review in progress')} (Attempt ${pr.attempt || 1}/3)</span>`);
-            } else if (pr.status_badge === 'RATE_LIMITED') {
-                pills.push(`<span class="badge badge-orange">⏳ Rate Limited (${escapeHtml(pr.status_label || 'Retrying')})</span>`);
-            } else if (pr.status_badge === 'REVIEW_FAILED') {
-                pills.push(`<span class="badge badge-red">❌ Review Failed</span>`);
-            } else if (pr.status_badge === 'ALREADY_REVIEWED') {
-                pills.push(`<span class="badge badge-purple">✓ Already Reviewed</span>`);
-            } else if (pr.has_user_auto_approved || pr.status_badge === 'APPROVED') {
-                pills.push(`<span class="badge badge-green">🤖 Auto Approved by You</span>`);
-            } else if (pr.has_user_manually_approved || pr.status_badge === 'MANUALLY_APPROVED') {
-                pills.push(`<span class="badge badge-blue">👤 Manually Approved</span>`);
-            } else if (status.review_outcome === 'NEEDS_WORK (Minor Issues Detected)') {
-                pills.push(`<span class="badge badge-yellow">💬 Needs Work (Minor Issues)</span>`);
-            } else if (pr.status_badge === 'COMMENTS_POSTED') {
-                pills.push(`<span class="badge badge-yellow">💬 Comments Posted</span>`);
-            } else if (pr.status_badge === 'SKIPPED_MAX_FILES') {
-                pills.push(`<span class="badge badge-red">🛑 Skipped (>100 Files)</span>`);
-            } else if (pr.is_own_pr) {
+            // 1. Bot Review Status always first (only 1)
+            const botStatus = getBotReviewStatus(pr, status);
+            pills.push(`<span class="badge ${botStatus.class}">${escapeHtml(botStatus.text)}</span>`);
+
+            // 2. Author / Ownership
+            if (pr.is_own_pr || pr.status_badge === 'OWN_PR') {
                 pills.push(`<span class="badge badge-purple">👤 Your PR (Author)</span>`);
-            } else {
-                pills.push(`<span class="badge badge-gray">⏳ Pending Review</span>`);
             }
 
+            // 3. Manually Approved
+            if (pr.has_user_manually_approved || pr.status_badge === 'MANUALLY_APPROVED') {
+                pills.push(`<span class="badge badge-blue">👤 Manually Approved</span>`);
+            }
+
+            // 4. Changes Requested by others
+            if (pr.has_other_changes_requested && (pr.other_changes_requested_by || []).length > 0) {
+                (pr.other_changes_requested_by || []).forEach(name => {
+                    pills.push(`<span class="badge badge-red">❌ Changes Requested by ${escapeHtml(name)}</span>`);
+                });
+            }
+
+            // 5. Commented by each reviewer/person
+            if (pr.has_other_commented && (pr.other_commented_by || []).length > 0) {
+                (pr.other_commented_by || []).forEach(name => {
+                    pills.push(`<span class="badge badge-yellow">💬 Commented by ${escapeHtml(name)}</span>`);
+                });
+            }
+
+            // 6. Check Error
             if (pr.has_check_error) {
                 pills.push(`<span class="badge badge-red">⚠️ Check Error</span>`);
             }
+
+            // 7. Merge Conflict
             if (pr.has_conflict) {
                 pills.push(`<span class="badge badge-red">⚠️ Merge Conflict</span>`);
             }

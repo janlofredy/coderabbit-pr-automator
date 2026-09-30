@@ -111,7 +111,22 @@ class TestDashboardBackend(unittest.TestCase):
         pr = status["pull_requests"][0]
         self.assertEqual(pr["status_badge"], "APPROVED")
         self.assertEqual(pr["status_label"], "Auto Approved by You")
+        self.assertEqual(pr["bot_review_outcome"], "APPROVED")
         self.assertEqual(pr["report_file"], "owner_repo1_pr101_abcdef.html")
+
+    def test_bot_review_outcome_tracking(self):
+        self.backend.refresh_pr_cache()
+        pr_key = "owner/repo1#101"
+
+        self.state_mgr.record_pr_status(pr_key, {
+            "status": "COMPLETED",
+            "review_outcome": "CHANGES_REQUESTED"
+        })
+
+        status = self.backend.get_annotated_status()
+        pr = status["pull_requests"][0]
+        self.assertEqual(pr["bot_review_outcome"], "CHANGES_REQUESTED")
+
 
     def test_status_badge_manually_approved(self):
         self.gh_client.get_pr_review_summary.return_value = {

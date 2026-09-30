@@ -412,12 +412,25 @@
             margin: -0.7rem 0 1rem;
         }
 
+        .btn-sm {
+            padding: 0.35rem 0.65rem;
+            font-size: 0.8rem;
+            font-weight: 500;
+            line-height: 1.25;
+            flex: 1;
+            justify-content: center;
+            text-align: center;
+            white-space: nowrap;
+        }
+
         .pr-actions {
             display: flex;
             align-items: center;
-            justify-content: flex-end;
             gap: 0.5rem;
             margin-top: auto;
+            padding-top: 0.75rem;
+            border-top: 1px solid rgba(55, 65, 81, 0.5);
+            width: 100%;
         }
 
         /* Modal Styles */
@@ -508,12 +521,12 @@
             <span>CodeRabbit Auto-Reviewer</span>
         </div>
         <div class="header-actions">
-            <span id="service-status-pill" class="badge badge-green">RUNNING</span>
+            <span id="service-status-pill" class="badge badge-green" title="Auto-Review Service Status">🟢 Running</span>
+            <span id="github-auth-pill" class="badge badge-gray" title="GitHub Authentication Status">🐙 Checking…</span>
+            <button id="coderabbit-auth-pill" class="badge badge-gray" type="button" onclick="openCodeRabbitAuthInstructions()" title="CodeRabbit CLI Status (Click for instructions)" style="cursor:pointer;font:inherit;">🐰 Checking…</button>
             <span id="strict-mode-pill" class="badge badge-purple" title="Strict Mode: PRs with any minor issue are not approved">STRICT: ON</span>
-            <button id="coderabbit-auth-pill" class="badge badge-gray" type="button" onclick="openCodeRabbitAuthInstructions()" title="Click for CodeRabbit CLI authentication instructions" style="cursor:pointer;font:inherit;">🐰 CodeRabbit Auth: Checking…</button>
+            <button id="global-rate-limit-pill" class="badge badge-orange" style="display:none; cursor:pointer;" onclick="clearRateLimit(this)" title="CodeRabbit Rate Limit active. Click to clear cooldown.">⏳ Rate Limited</button>
             <button id="btn-settings" class="btn btn-sm" onclick="openSettingsModal()">⚙️ Settings</button>
-            <button id="btn-repos" class="btn btn-sm" onclick="openRepoModal()">📁 Repositories</button>
-            <button id="btn-toggle-service" class="btn btn-sm" onclick="toggleService()">Pause Service</button>
             <button id="btn-scan-now" class="btn btn-primary btn-sm" onclick="triggerScan(false)">▶ Run Scan Now</button>
         </div>
     </header>
@@ -623,6 +636,24 @@
             </div>
 
             <div style="display: flex; flex-direction: column; gap: 1.15rem;">
+                <!-- Service Operation & Repositories Controls -->
+                <div style="display: flex; flex-direction: column; gap: 0.75rem; padding: 0.85rem; background: #1a2234; border-radius: 6px; border: 1px solid #1f2937;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <span style="font-size: 0.85rem; font-weight: 600; display: block;">Auto-Review Service</span>
+                            <small id="service-control-desc" style="color: var(--text-muted); font-size: 0.75rem;">Currently active and scanning repositories.</small>
+                        </div>
+                        <button id="btn-toggle-service" class="btn btn-sm" onclick="toggleService()">Pause Service</button>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 0.65rem;">
+                        <div>
+                            <span style="font-size: 0.85rem; font-weight: 600; display: block;">Tracked Repositories</span>
+                            <small id="setting-repo-count-desc" style="color: var(--text-muted); font-size: 0.75rem;">Manage which GitHub repositories to scan and review.</small>
+                        </div>
+                        <button id="btn-repos" class="btn btn-sm" onclick="openRepoModal()">📁 Manage Repositories</button>
+                    </div>
+                </div>
+
                 <div>
                     <label for="setting-github-token" style="display:block; font-size:0.85rem; font-weight:600; margin-bottom:0.35rem;">GitHub Personal Access Token</label>
                     <input type="password" id="setting-github-token" class="form-input" autocomplete="new-password" placeholder="Paste a token with repository access" style="max-width:100%;">
@@ -736,14 +767,61 @@
             // Service Status
             const pill = document.getElementById('service-status-pill');
             const toggleBtn = document.getElementById('btn-toggle-service');
+            const serviceDesc = document.getElementById('service-control-desc');
             if (data.service_enabled) {
-                pill.className = "badge badge-green";
-                pill.textContent = "RUNNING";
-                toggleBtn.textContent = "Pause Service";
+                if (pill) {
+                    pill.className = "badge badge-green";
+                    pill.textContent = "🟢 Running";
+                    pill.title = "Auto-Review Service is active and monitoring repositories.";
+                }
+                if (toggleBtn) toggleBtn.textContent = "Pause Service";
+                if (serviceDesc) serviceDesc.textContent = "Currently active and scanning repositories.";
             } else {
-                pill.className = "badge badge-gray";
-                pill.textContent = "PAUSED";
-                toggleBtn.textContent = "Resume Service";
+                if (pill) {
+                    pill.className = "badge badge-gray";
+                    pill.textContent = "⏸️ Paused";
+                    pill.title = "Auto-Review Service is paused.";
+                }
+                if (toggleBtn) toggleBtn.textContent = "Resume Service";
+                if (serviceDesc) serviceDesc.textContent = "Service is paused. Background checks are halted.";
+            }
+
+            // GitHub Authentication Status
+            const ghPill = document.getElementById('github-auth-pill');
+            if (ghPill) {
+                if (data.authenticated_user) {
+                    ghPill.className = "badge badge-green";
+                    ghPill.textContent = `🐙 Connected (@${data.authenticated_user})`;
+                    ghPill.title = `GitHub Token active for @${data.authenticated_user}`;
+                } else {
+                    ghPill.className = "badge badge-yellow";
+                    ghPill.textContent = "🐙 Disconnected";
+                    ghPill.title = "No valid GitHub token configured. Enter a token in Settings.";
+                }
+            }
+
+            // Global CodeRabbit Rate Limit Indicator
+            const rateLimitPill = document.getElementById('global-rate-limit-pill');
+            if (rateLimitPill) {
+                if (data.rate_limited) {
+                    const remainingSec = Math.max(0, data.rate_limit_remaining_seconds || 0);
+                    const minutes = Math.floor(remainingSec / 60);
+                    const seconds = remainingSec % 60;
+                    const timeStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+                    rateLimitPill.style.display = "inline-flex";
+                    rateLimitPill.className = "badge badge-orange";
+                    rateLimitPill.textContent = `⏳ Rate Limited (${timeStr})`;
+                    rateLimitPill.title = `CodeRabbit rate limit active (${data.rate_limit_reason || 'Quota exceeded'}). Click to reset cooldown.`;
+                } else {
+                    rateLimitPill.style.display = "none";
+                }
+            }
+
+            // Tracked Repositories description in Settings Modal
+            const repoDesc = document.getElementById('setting-repo-count-desc');
+            if (repoDesc && data.repositories) {
+                const activeCount = data.repositories.filter(r => r.enabled).length;
+                repoDesc.textContent = `${activeCount} active repository${activeCount === 1 ? '' : 'ies'} of ${data.repositories.length} total.`;
             }
 
             // Strict Approval Mode
@@ -829,29 +907,32 @@
             }).join('');
         }
 
-        function getBadgeInfo(pr) {
-            switch (pr.status_badge) {
-                case 'RATE_LIMITED':
-                    return { class: 'badge-orange', text: `⏳ Rate Limited (${pr.status_label || 'Retrying'})` };
-                case 'REVIEW_IN_PROGRESS':
-                    return { class: 'badge-blue', text: `⚡ ${pr.status_label || 'Review in Progress'} (Attempt ${pr.attempt || 1}/3)` };
-                case 'OTHER_CHANGES_REQUESTED':
-                    return { class: 'badge-red', text: `❌ ${pr.status_label || 'Changes Requested'}` };
-                case 'APPROVED':
-                    return { class: 'badge-green', text: '✅ Approved by You' };
-                case 'COMMENTS_POSTED':
-                    return { class: 'badge-yellow', text: '💬 Comments Posted' };
-                case 'SKIPPED_MAX_FILES':
-                    return { class: 'badge-red', text: '🛑 Skipped (>100 Files)' };
-                case 'REVIEW_FAILED':
-                    return { class: 'badge-red', text: '❌ Review Failed' };
-                case 'ALREADY_REVIEWED':
-                    return { class: 'badge-purple', text: '✓ Already Reviewed' };
-                case 'OWN_PR':
-                    return { class: 'badge-purple', text: '👤 Your PR (Author)' };
-                default:
-                    return { class: 'badge-gray', text: '⏳ Pending Review' };
+        function getBotReviewStatus(pr) {
+            // Priority 1: Ongoing Review
+            if (pr.status_badge === 'REVIEW_IN_PROGRESS' || pr.status_badge === 'RATE_LIMITED') {
+                return { class: 'badge-blue', text: '⚡ Bot Ongoing Review' };
             }
+            // Priority 2: Changes Requested
+            if (pr.bot_review_outcome === 'CHANGES_REQUESTED' || pr.status_badge === 'OTHER_CHANGES_REQUESTED') {
+                return { class: 'badge-red', text: '❌ Bot Changes Requested' };
+            }
+            // Priority 3: Approved
+            if (pr.has_user_auto_approved || pr.status_badge === 'APPROVED' || pr.bot_review_outcome === 'APPROVED') {
+                return { class: 'badge-green', text: '🤖 Bot Approved' };
+            }
+            // Priority 4: Failed / Skipped
+            if (pr.status_badge === 'REVIEW_FAILED') {
+                return { class: 'badge-red', text: '❌ Review Failed' };
+            }
+            if (pr.status_badge === 'SKIPPED_MAX_FILES') {
+                return { class: 'badge-red', text: `🛑 ${pr.status_label || 'Skipped (>100 Files)'}` };
+            }
+            // Priority 5: Default Pending Review
+            return { class: 'badge-gray', text: '⏳ Bot Pending Review' };
+        }
+
+        function getBadgeInfo(pr) {
+            return getBotReviewStatus(pr);
         }
 
         function renderPRs(prs) {
@@ -883,62 +964,43 @@
                 // Generate status pills
                 const pills = [];
 
-                if (pr.status_badge === 'RATE_LIMITED') {
-                    pills.push(`<span class="badge badge-orange">⏳ Rate Limited (${escapeHtml(pr.status_label || 'Retrying')})</span>`);
-                } else if (pr.status_badge === 'REVIEW_IN_PROGRESS') {
-                    pills.push(`<span class="badge badge-blue">⚡ ${escapeHtml(pr.status_label || 'Review in Progress')} (Attempt ${pr.attempt || 1}/3)</span>`);
-                } else if (pr.status_badge === 'SKIPPED_MAX_FILES') {
-                    pills.push(`<span class="badge badge-red">🛑 ${escapeHtml(pr.status_label || 'Skipped: file limit exceeded')}</span>`);
-                } else if (pr.status_badge === 'REVIEW_FAILED') {
-                    pills.push(`<span class="badge badge-red">❌ Review Failed</span>`);
-                } else if (pr.status_badge === 'ALREADY_REVIEWED') {
-                    pills.push(`<span class="badge badge-purple">✓ Already Reviewed</span>`);
-                } else if (pr.status_badge === 'OWN_PR') {
+                // 1. Bot Review Status always first (only 1)
+                const botStatus = getBotReviewStatus(pr);
+                pills.push(`<span class="badge ${botStatus.class}">${escapeHtml(botStatus.text)}</span>`);
+
+                // 2. Author / Ownership
+                if (pr.is_own_pr || pr.status_badge === 'OWN_PR') {
                     pills.push(`<span class="badge badge-purple">👤 Your PR (Author)</span>`);
                 }
 
-                // Auto Approved by You
-                if (pr.has_user_auto_approved || pr.status_badge === 'APPROVED') {
-                    pills.push(`<span class="badge badge-green">🤖 Auto Approved by You</span>`);
-                }
-
-                // Manually Approved by you
+                // 3. Manually Approved by you
                 if (pr.has_user_manually_approved || pr.status_badge === 'MANUALLY_APPROVED') {
                     pills.push(`<span class="badge badge-blue">👤 Manually Approved by you</span>`);
                 }
 
-                // Changes requested by others
+                // 4. Changes requested by others
                 if (pr.has_other_changes_requested && (pr.other_changes_requested_by || []).length > 0) {
                     (pr.other_changes_requested_by || []).forEach(name => {
                         pills.push(`<span class="badge badge-red">❌ Changes Requested by ${escapeHtml(name)}</span>`);
                     });
                 }
 
-                // Commented by each reviewer/person
+                // 5. Commented by each reviewer/person
                 if (pr.has_other_commented && (pr.other_commented_by || []).length > 0) {
                     (pr.other_commented_by || []).forEach(name => {
                         pills.push(`<span class="badge badge-yellow">💬 Commented by ${escapeHtml(name)}</span>`);
                     });
                 }
 
-                // Check Error - kept short as just "Check Error"
+                // 6. Check Error
                 if (pr.has_check_error) {
                     const failList = (pr.failed_checks || []).join(', ');
                     pills.push(`<span class="badge badge-red"${failList ? ` title="${escapeHtml(failList)}"` : ''}>⚠️ Check Error</span>`);
                 }
 
-                // Merge Conflict
+                // 7. Merge Conflict
                 if (pr.has_conflict) {
                     pills.push(`<span class="badge badge-red" title="This pull request has merge conflicts that must be resolved">⚠️ Merge Conflict</span>`);
-                }
-
-                // If no specific pills matched and no active status, show pending or comments posted
-                if (pills.length === 0) {
-                    if (pr.status_badge === 'COMMENTS_POSTED') {
-                        pills.push(`<span class="badge badge-yellow">💬 Comments Posted</span>`);
-                    } else {
-                        pills.push(`<span class="badge badge-gray">⏳ Pending Review</span>`);
-                    }
                 }
 
                 const baseBranchUpper = (pr.base_ref || '').trim().toUpperCase();
@@ -964,7 +1026,7 @@
                         ${pr.status_badge === 'RATE_LIMITED' ? `<button class="btn btn-sm btn-danger" style="margin: -0.5rem 0 1rem;" onclick="clearRateLimit(this)">Clear shared cooldown</button>` : ''}
                     </div>
                     <div class="pr-actions">
-                        <a href="/pr-details?pr_key=${encodeURIComponent(pr.pr_key)}" class="btn btn-sm btn-primary" title="View pull request details">Details</a>
+                        <a href="/pr-details?pr_key=${encodeURIComponent(pr.pr_key)}" class="btn btn-sm btn-primary" title="View pull request details">📄 Details</a>
                         <a href="${pr.html_url}" target="_blank" class="btn btn-sm">GitHub ↗</a>
                         <button class="btn btn-sm" onclick="triggerReview('${pr.pr_key}', false, event)">⚡ Review</button>
                         <button class="btn btn-sm btn-warning" onclick="triggerReview('${pr.pr_key}', true, event)" title="Bypass rate limit or prior review">⚡ Force</button>
@@ -1219,13 +1281,16 @@
             const pill = document.getElementById('coderabbit-auth-pill');
             if (state.status === 'authenticated') {
                 pill.className = 'badge badge-green';
-                pill.textContent = '🐰 CodeRabbit Auth: Connected';
+                pill.textContent = '🐰 Connected';
+                pill.title = 'CodeRabbit CLI: Connected and authenticated. Click for details.';
             } else if (state.status === 'needs_auth') {
                 pill.className = 'badge badge-yellow';
-                pill.textContent = '🐰 CodeRabbit Auth: Login required';
+                pill.textContent = '🐰 Needs Login';
+                pill.title = 'CodeRabbit CLI: Login required. Click to view instructions.';
             } else {
                 pill.className = 'badge badge-gray';
-                pill.textContent = '🐰 CodeRabbit Auth: Unavailable';
+                pill.textContent = '🐰 Disconnected';
+                pill.title = 'CodeRabbit CLI: Unavailable or not found. Click for instructions.';
             }
             const message = document.getElementById('coderabbit-auth-message');
             if (message) {
@@ -1238,7 +1303,8 @@
         } catch (_) {
             const pill = document.getElementById('coderabbit-auth-pill');
             pill.className = 'badge badge-gray';
-            pill.textContent = '🐰 CodeRabbit Auth: Unavailable';
+            pill.textContent = '🐰 Disconnected';
+            pill.title = 'CodeRabbit CLI: Could not check status. Click for instructions.';
         }
     }
     function openCodeRabbitAuthInstructions() {

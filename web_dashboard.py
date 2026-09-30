@@ -232,6 +232,11 @@ class DashboardBackend:
                 item["status_label"] = "Pending Review"
                 item["status_description"] = "Waiting for the next review scan to check eligibility and start an automated review."
 
+            # Track bot review outcome
+            bot_outcome = status_entry.get("review_outcome") or status_entry.get("review_state")
+            if not bot_outcome and item.get("has_user_auto_approved"):
+                bot_outcome = "APPROVED"
+            item["bot_review_outcome"] = bot_outcome
             item["report_file"] = status_entry.get("report_file", "")
             annotated_prs.append(item)
 
