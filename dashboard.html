@@ -821,15 +821,15 @@
                 if (serviceDesc) serviceDesc.textContent = "Service is paused. Background checks are halted.";
             }
 
-            // GitHub Authentication Status (Emoji only)
+            // GitHub Authentication Status (Emoji only: 🐙 Connected, ⛓️‍💥 Disconnected)
             const ghPill = document.getElementById('github-auth-pill');
             if (ghPill) {
                 if (data.authenticated_user) {
                     ghPill.textContent = "🐙";
                     ghPill.title = `GitHub: Connected (@${data.authenticated_user})`;
                 } else {
-                    ghPill.textContent = "🐙";
-                    ghPill.title = "GitHub: Disconnected (No token configured in Settings)";
+                    ghPill.textContent = "⛓️‍💥";
+                    ghPill.title = "GitHub: Disconnected / Unlinked (No token configured in Settings)";
                 }
             }
 
@@ -1297,12 +1297,14 @@
             const state = await response.json();
             const pill = document.getElementById('coderabbit-auth-pill');
             if (pill) {
-                pill.textContent = '🐰';
                 if (state.status === 'authenticated') {
+                    pill.textContent = '🐰';
                     pill.title = 'CodeRabbit CLI: Connected & Authenticated (Click for details)';
                 } else if (state.status === 'needs_auth') {
+                    pill.textContent = '🔒';
                     pill.title = 'CodeRabbit CLI: Login required (Click for instructions)';
                 } else {
+                    pill.textContent = '🔒';
                     pill.title = 'CodeRabbit CLI: Unavailable or not logged in (Click for instructions)';
                 }
             }
@@ -1317,7 +1319,7 @@
         } catch (_) {
             const pill = document.getElementById('coderabbit-auth-pill');
             if (pill) {
-                pill.textContent = '🐰';
+                pill.textContent = '🔒';
                 pill.title = 'CodeRabbit CLI: Status check failed (Click for instructions)';
             }
         }
