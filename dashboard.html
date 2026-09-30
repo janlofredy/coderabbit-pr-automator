@@ -809,7 +809,7 @@
         <div class="header-actions">
             <div class="header-status-bar" title="System Status Indicators">
                 <span id="service-status-pill" class="status-icon-pill" title="Auto-Review Service: Running">🟢</span>
-                <span id="github-auth-pill" class="status-icon-pill" title="GitHub Authentication Status: Checking…">🐙</span>
+                <button id="github-auth-pill" class="status-icon-pill clickable" type="button" onclick="openGitHubAuthInstructions()" title="GitHub Authentication Status: Checking… (Click for instructions)">🐙</button>
                 <button id="coderabbit-auth-pill" class="status-icon-pill clickable" type="button" onclick="openCodeRabbitAuthInstructions()" title="CodeRabbit CLI: Checking… (Click for instructions)">🐰</button>
             </div>
             <button id="btn-queue-drawer" class="btn btn-sm btn-queue-trigger" onclick="toggleQueueDrawer()" title="View Review Queue & Runner Status">
@@ -954,6 +954,43 @@
         </div>
     </div>
 
+    <!-- GitHub Authentication & Token Instructions Modal -->
+    <div id="github-auth-modal" class="modal-overlay">
+        <div class="modal" style="max-width: 560px;">
+            <div class="modal-header">
+                <h3>🐙 GitHub Authentication & Token Guide</h3>
+                <button class="modal-close-btn" onclick="closeGitHubAuthInstructions()" title="Close">✕</button>
+            </div>
+            <div id="github-auth-status-message" style="margin: 0.75rem 0 1rem; padding: 0.75rem 1rem; border-radius: 8px; font-size: 0.85rem; background: #162032; border: 1px solid var(--border-color);">
+                Checking connection…
+            </div>
+            <div style="font-size: 0.85rem; line-height: 1.6; color: var(--text-main);">
+                <p style="margin-bottom: 0.75rem; color: var(--text-muted);">
+                    CodeRabbit Auto-Reviewer requires a GitHub Personal Access Token (classic) to discover pull requests, fetch code diffs, submit reviews, and approve clean changes.
+                </p>
+                <div style="background: rgba(99, 102, 241, 0.08); border: 1px solid rgba(99, 102, 241, 0.3); border-radius: 8px; padding: 1rem; margin-bottom: 1rem;">
+                    <div style="font-weight: 700; color: #c7d2fe; margin-bottom: 0.5rem; display: flex; align-items: center; justify-content: space-between;">
+                        <span>Quick Setup: 1-Click Link</span>
+                        <a href="https://github.com/settings/tokens/new?scopes=repo&description=CodeRabbit+Auto-Reviewer" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-primary" style="text-decoration: none;">
+                            🔗 Generate on GitHub ↗
+                        </a>
+                    </div>
+                    <ol style="padding-left: 1.25rem; font-size: 0.82rem; color: var(--text-muted); space-y: 0.25rem;">
+                        <li>Click the button above to open GitHub with <code>repo</code> scope pre-selected.</li>
+                        <li>Choose an <strong>Expiration</strong> (e.g., <em>90 days</em> or <em>No expiration</em>).</li>
+                        <li>Ensure <strong><code>repo</code></strong> is checked (or <strong><code>public_repo</code></strong> for public projects).</li>
+                        <li>Click <strong>Generate token</strong> at the bottom of the page.</li>
+                        <li>Copy the token (starts with <code>ghp_</code>) and paste it into Settings.</li>
+                    </ol>
+                </div>
+            </div>
+            <div style="display:flex; justify-content:flex-end; gap:0.5rem; margin-top:1.25rem; border-top:1px solid var(--border-color); padding-top:1rem;">
+                <button class="btn btn-primary btn-sm" onclick="closeGitHubAuthInstructions(); openSettingsModal();">⚙️ Open Settings to Paste Token</button>
+                <button class="btn btn-secondary btn-sm" onclick="closeGitHubAuthInstructions()">Close</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Runtime Settings Modal -->
     <div id="settings-modal" class="modal-overlay">
         <div class="modal" style="max-width: 550px;">
@@ -985,11 +1022,34 @@
                 </div>
 
                 <div>
-                    <label for="setting-github-token" style="display:block; font-size:0.85rem; font-weight:600; margin-bottom:0.35rem;">GitHub Personal Access Token</label>
-                    <input type="password" id="setting-github-token" class="form-input" autocomplete="new-password" placeholder="Paste a token with repository access" style="max-width:100%;">
-                    <small id="github-token-state" style="display:block; color:var(--text-muted); font-size:0.75rem; margin-top:0.25rem;">Token is stored in persistent app settings. Leave blank to keep the current token.</small>
-                    <label id="github-token-clear-wrap" style="display:none; align-items:center; gap:0.45rem; margin-top:0.5rem; font-size:0.8rem; cursor:pointer;">
-                        <input type="checkbox" id="setting-clear-github-token" style="width:15px; height:15px; accent-color:var(--primary);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                        <label for="setting-github-token" style="font-size: 0.85rem; font-weight: 600;">GitHub Personal Access Token</label>
+                        <button type="button" class="btn btn-sm" style="padding: 0.2rem 0.55rem; font-size: 0.75rem; color: #a5b4fc; background: rgba(99, 102, 241, 0.15); border: 1px solid rgba(99, 102, 241, 0.35); border-radius: 5px;" onclick="toggleTokenGuide()">
+                            📖 How to get a token?
+                        </button>
+                    </div>
+
+                    <!-- Collapsible Token Instructions Card -->
+                    <div id="github-token-guide" style="display: none; margin-bottom: 0.75rem; padding: 0.85rem 1rem; background: rgba(99, 102, 241, 0.08); border: 1px solid rgba(99, 102, 241, 0.3); border-radius: 8px; font-size: 0.82rem; line-height: 1.55;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                            <strong style="color: #c7d2fe;">Step-by-step: Generate GitHub Token</strong>
+                            <a href="https://github.com/settings/tokens/new?scopes=repo&description=CodeRabbit+Auto-Reviewer" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-primary" style="padding: 0.2rem 0.6rem; font-size: 0.72rem; text-decoration: none;">
+                                🔗 Open GitHub ↗
+                            </a>
+                        </div>
+                        <ol style="padding-left: 1.25rem; color: var(--text-muted); margin: 0; display: flex; flex-direction: column; gap: 0.25rem;">
+                            <li>Open <a href="https://github.com/settings/tokens/new?scopes=repo&description=CodeRabbit+Auto-Reviewer" target="_blank" rel="noopener noreferrer" style="color: #93c5fd; text-decoration: underline;">GitHub Token Generator (classic)</a> with pre-filled settings.</li>
+                            <li>Set <strong>Expiration</strong> (e.g., <em>90 days</em> or <em>No expiration</em> for long-running bots).</li>
+                            <li>Verify scopes: <strong><code>repo</code></strong> (for private repositories, reviews & approvals) or <strong><code>public_repo</code></strong> (for public projects only).</li>
+                            <li>Click <strong>Generate token</strong> at the bottom of the page.</li>
+                            <li>Copy your new token starting with <code>ghp_</code> and paste it into the input below.</li>
+                        </ol>
+                    </div>
+
+                    <input type="password" id="setting-github-token" class="form-input" autocomplete="new-password" placeholder="Paste a token with repository access (e.g. ghp_...)" style="max-width: 100%;">
+                    <small id="github-token-state" style="display: block; color: var(--text-muted); font-size: 0.75rem; margin-top: 0.25rem;">Token is stored in persistent app settings. Leave blank to keep the current token.</small>
+                    <label id="github-token-clear-wrap" style="display: none; align-items: center; gap: 0.45rem; margin-top: 0.5rem; font-size: 0.8rem; cursor: pointer;">
+                        <input type="checkbox" id="setting-clear-github-token" style="width: 15px; height: 15px; accent-color: var(--primary);">
                         Remove the saved GitHub token
                     </label>
                 </div>
@@ -1786,6 +1846,42 @@
     }
     function closeCodeRabbitAuthInstructions() {
         document.getElementById('coderabbit-auth-modal').classList.remove('active');
+    }
+
+    function toggleTokenGuide() {
+        const guide = document.getElementById('github-token-guide');
+        if (!guide) return;
+        guide.style.display = guide.style.display === 'none' ? 'block' : 'none';
+    }
+
+    function openGitHubAuthInstructions() {
+        const modal = document.getElementById('github-auth-modal');
+        const statusMsg = document.getElementById('github-auth-status-message');
+        if (modal) modal.classList.add('active');
+        if (statusMsg) {
+            if (currentStatus && currentStatus.authenticated_user) {
+                statusMsg.innerHTML = `
+                    <div style="display:flex; align-items:center; justify-content:space-between;">
+                        <span style="color:#10b981; font-weight:600;">🟢 Connected to GitHub</span>
+                        <span class="badge badge-green">@${escapeHtml(currentStatus.authenticated_user)}</span>
+                    </div>
+                    <small style="color:var(--text-muted); display:block; margin-top:4px;">Token is active and authorized with repository access.</small>
+                `;
+            } else {
+                statusMsg.innerHTML = `
+                    <div style="display:flex; align-items:center; justify-content:space-between;">
+                        <span style="color:#ef4444; font-weight:600;">🔴 Disconnected / No Token</span>
+                        <span class="badge badge-red">Token Missing</span>
+                    </div>
+                    <small style="color:var(--text-muted); display:block; margin-top:4px;">No personal access token found in persistent settings. Follow the guide below to generate one.</small>
+                `;
+            }
+        }
+    }
+
+    function closeGitHubAuthInstructions() {
+        const modal = document.getElementById('github-auth-modal');
+        if (modal) modal.classList.remove('active');
     }
 
     async function openSettingsModal() {
