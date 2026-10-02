@@ -130,7 +130,7 @@ class TestReviewEngine(unittest.TestCase):
         self.assertTrue(res["is_own_pr"])
         # Crucial: Event MUST NOT be APPROVE for own PR! It should be COMMENT!
         self.assertEqual(res["event"], "COMMENT")
-        self.assertIn("Self PR: Commented", res["review_outcome"])
+        self.assertEqual(res["review_outcome"], "APPROVED")
         self.gh_client.submit_pull_request_review.assert_called_once()
         review_call = self.gh_client.submit_pull_request_review.call_args
         self.assertEqual(review_call.kwargs["event"], "COMMENT")

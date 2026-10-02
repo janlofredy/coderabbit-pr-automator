@@ -936,9 +936,10 @@ class AutoReviewEngine:
         # Determine Review Event only after the CLI reports a valid completion.
         if critical_major_count > 0:
             if is_own_pr:
-                # Self-Approval / Request Changes Prevention Guard on own PR
+                # Self-Approval / Request Changes Prevention Guard on own PR:
+                # GitHub API rejects APPROVE/REQUEST_CHANGES for author with HTTP 422, so submit as COMMENT
                 event = "COMMENT"
-                review_outcome = "CHANGES_REQUESTED (Self PR: Commented)"
+                review_outcome = "CHANGES_REQUESTED"
             else:
                 event = "REQUEST_CHANGES"
                 review_outcome = "CHANGES_REQUESTED"
@@ -947,12 +948,12 @@ class AutoReviewEngine:
             event = "COMMENT"
             review_outcome = "NEEDS_WORK (Minor Issues Detected)"
         else:
-            if auto_approve and not is_own_pr:
-                event = "APPROVE"
+            if auto_approve:
+                event = "COMMENT" if is_own_pr else "APPROVE"
                 review_outcome = "APPROVED"
             else:
                 event = "COMMENT"
-                review_outcome = "APPROVED (Self PR: Commented)" if is_own_pr else "COMMENTED"
+                review_outcome = "COMMENTED"
 
         # Generate HTML report
         self.state_manager.set_pr_reviewing(

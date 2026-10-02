@@ -756,7 +756,7 @@
                 return { class: 'badge-red', text: '❌ Bot Changes Requested' };
             }
             // Priority 3: Approved
-            if (pr.has_user_auto_approved || pr.status_badge === 'APPROVED' || pr.bot_review_outcome === 'APPROVED' || status.review_outcome === 'APPROVED') {
+            if (pr.has_user_auto_approved || pr.status_badge === 'APPROVED' || (pr.bot_review_outcome && pr.bot_review_outcome.startsWith('APPROVED')) || (status.review_outcome && status.review_outcome.startsWith('APPROVED'))) {
                 return { class: 'badge-green', text: '🤖 Bot Approved' };
             }
             // Priority 4: Failed / Skipped

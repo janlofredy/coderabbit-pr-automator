@@ -256,9 +256,9 @@ class DashboardBackend:
 
             is_auto_approved = (
                 item.get("has_user_auto_approved", False)
-                or status_entry.get("review_outcome") == "APPROVED"
+                or (status_entry.get("review_outcome") or "").startswith("APPROVED")
                 or (status_entry.get("review_state") == "APPROVED" and "CodeRabbit" in str(status_entry.get("review_body", "")))
-                or (gh_review_state == "APPROVED" and item.get("has_user_auto_approved", False))
+                or ((gh_review_state or "").startswith("APPROVED") and item.get("has_user_auto_approved", False))
             )
             is_manual_approved = item.get("has_user_manually_approved", False)
 
@@ -329,10 +329,6 @@ class DashboardBackend:
                 item["status_badge"] = "COMMENTS_POSTED"
                 item["status_label"] = "Comments Posted"
                 item["status_description"] = "The review completed and posted findings or comments to this pull request."
-            elif item["is_own_pr"]:
-                item["status_badge"] = "OWN_PR"
-                item["status_label"] = "Your PR (Author)"
-                item["status_description"] = "This pull request belongs to the authenticated account; automatic approval is disabled for your own PR."
             elif key in queued_keys:
                 item["status_badge"] = "QUEUED"
                 item["status_label"] = "Queued for Review"
@@ -344,7 +340,9 @@ class DashboardBackend:
 
             # Track bot review outcome
             bot_outcome = status_entry.get("review_outcome") or status_entry.get("review_state")
-            if not bot_outcome and item.get("has_user_auto_approved"):
+            if is_auto_approved:
+                bot_outcome = "APPROVED"
+            elif not bot_outcome and item.get("has_user_auto_approved"):
                 bot_outcome = "APPROVED"
             item["bot_review_outcome"] = bot_outcome
             item["report_file"] = status_entry.get("report_file", "")

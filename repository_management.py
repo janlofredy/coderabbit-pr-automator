@@ -178,11 +178,7 @@ class RepositoryManagementService:
             status_name = status_entry.get("status")
 
             # Check eligibility:
-            # 1. Skip if own PR (author matches auth_user) unless force
-            if pr.get("is_own_pr", False) and not force:
-                continue
-
-            # 2. Skip if already reviewed on current commit SHA unless force
+            # 1. Skip if already reviewed on current commit SHA unless force
             head_sha = pr.get("head_sha", "")
             if status_name == "ALREADY_REVIEWED" and status_entry.get("head_sha") == head_sha and not force:
                 continue

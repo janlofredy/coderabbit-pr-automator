@@ -466,7 +466,8 @@ class GitHubClient:
                     elif state == "APPROVED":
                         other_approved.append(reviewer_login)
                     elif state == "COMMENTED":
-                        other_commented.add(reviewer_login)
+                        if not is_cr_auto and "coderabbit" not in rev_lower:
+                            other_commented.add(reviewer_login)
 
         except Exception as e:
             logger.warning("Error inspecting review summary for %s/%s PR #%s: %s", owner, repo, pr_number, e)

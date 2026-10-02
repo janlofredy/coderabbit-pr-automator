@@ -178,8 +178,21 @@ class TestDashboardBackend(unittest.TestCase):
         status = self.backend.get_annotated_status()
         pr = status["pull_requests"][0]
         self.assertTrue(pr["is_own_pr"])
-        self.assertEqual(pr["status_badge"], "OWN_PR")
-        self.assertEqual(pr["status_label"], "Your PR (Author)")
+        self.assertEqual(pr["status_badge"], "PENDING_REVIEW")
+        self.assertEqual(pr["status_label"], "Pending Review")
+
+        # When reviewed and approved, own PR should have APPROVED status badge
+        self.state_mgr.record_pr_status("owner/repo1#102", {
+            "status": "COMPLETED",
+            "review_outcome": "APPROVED",
+            "is_own_pr": True,
+            "head_sha": "99998888"
+        })
+        status_after_review = self.backend.get_annotated_status()
+        pr_after = status_after_review["pull_requests"][0]
+        self.assertTrue(pr_after["is_own_pr"])
+        self.assertEqual(pr_after["status_badge"], "APPROVED")
+        self.assertEqual(pr_after["bot_review_outcome"], "APPROVED")
 
     def test_status_badge_other_changes_requested(self):
         self.gh_client.get_pr_review_summary.return_value = {
@@ -391,6 +404,33 @@ class TestDashboardBackend(unittest.TestCase):
                 review_service._init_queue_from_state()
                 queue_state = review_service.get_review_queue()
                 self.assertTrue(any(item["pr_key"] == "owner/repo1#101" for item in queue_state["pending"]))
+
+    def test_scan_and_enqueue_pending_own_pr(self):
+        """Verifies that self-authored PRs are automatically discovered and enqueued."""
+        review_service = self.backend.review_service
+        repo_service = self.backend.repository_service
+
+        # Mock PR authored by the authenticated user
+        self.gh_client.list_open_prs.return_value = [
+            {
+                "number": 105,
+                "title": "My own PR",
+                "user": {"login": "test_auth_user"},
+                "base": {"ref": "main"},
+                "head": {"ref": "feature-mine", "sha": "111122223333"},
+                "html_url": "https://github.com/owner/repo1/pull/105",
+                "created_at": "2026-09-23T10:00:00Z",
+                "updated_at": "2026-09-23T10:05:00Z"
+            }
+        ]
+
+        with unittest.mock.patch.object(self.backend.review_engine, "review_single_pr"):
+            with unittest.mock.patch.object(review_service, "_start_queue_worker_locked"):
+                enqueued = repo_service.discover_and_enqueue_pending(self.state_mgr, force=False)
+                self.assertEqual(enqueued, 1)
+                review_service._init_queue_from_state()
+                queue_state = review_service.get_review_queue()
+                self.assertTrue(any(item["pr_key"] == "owner/repo1#105" for item in queue_state["pending"]))
 
     def test_queue_sync_no_duplicates_or_memory_leak(self):
         """Repeated calls to _init_queue_from_state must not duplicate items or leak memory."""

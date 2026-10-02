@@ -1591,7 +1591,7 @@
                 return { class: 'badge-red', text: '❌ Bot Changes Requested' };
             }
             // Priority 5: Approved
-            if (pr.has_user_auto_approved || pr.status_badge === 'APPROVED' || pr.bot_review_outcome === 'APPROVED') {
+            if (pr.has_user_auto_approved || pr.status_badge === 'APPROVED' || (pr.bot_review_outcome && pr.bot_review_outcome.startsWith('APPROVED'))) {
                 return { class: 'badge-green', text: '🤖 Bot Approved' };
             }
             if (pr.has_user_manually_approved || pr.status_badge === 'MANUALLY_APPROVED') {
@@ -1603,9 +1603,6 @@
             }
             if (pr.status_badge === 'ALREADY_REVIEWED') {
                 return { class: 'badge-gray', text: '✔️ Already Reviewed' };
-            }
-            if (pr.is_own_pr || pr.status_badge === 'OWN_PR') {
-                return { class: 'badge-gray', text: '👤 Your PR (Author)' };
             }
             // Priority 6: Failed / Skipped
             if (pr.status_badge === 'REVIEW_FAILED') {
