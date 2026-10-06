@@ -577,6 +577,46 @@ class TestDashboardBackend(unittest.TestCase):
         self.assertEqual(pr["status_badge"], "QUEUED")
         self.assertEqual(pr["status_label"], "Queued for Review")
 
+    def test_delta_caching_skips_redundant_summary_fetch(self):
+        """Verify that when a PR's SHA and updated_at have not changed, get_pr_review_summary is not re-invoked."""
+        repo_service = self.backend.repository_service
+        self.gh_client.get_pr_review_summary.reset_mock()
+
+        # First refresh: caches the PR and calls get_pr_review_summary once
+        repo_service.refresh_pr_cache()
+        self.assertEqual(self.gh_client.get_pr_review_summary.call_count, 1)
+
+        # Second refresh: same SHA and updated_at, should reuse cache and NOT call get_pr_review_summary again
+        repo_service.refresh_pr_cache()
+        self.assertEqual(self.gh_client.get_pr_review_summary.call_count, 1)
+
+    def test_delta_caching_invalidates_on_new_sha_or_updated_at(self):
+        """Verify that if head_sha or updated_at changes, get_pr_review_summary is called again."""
+        repo_service = self.backend.repository_service
+        self.gh_client.get_pr_review_summary.reset_mock()
+
+        # First refresh
+        repo_service.refresh_pr_cache()
+        self.assertEqual(self.gh_client.get_pr_review_summary.call_count, 1)
+
+        # Simulate a new commit pushed to the PR
+        self.gh_client.list_open_prs.return_value = [
+            {
+                "number": 101,
+                "title": "Add awesome feature",
+                "user": {"login": "contributor_jane"},
+                "base": {"ref": "main"},
+                "head": {"ref": "feature-awesome", "sha": "new_commit_sha_999"},
+                "html_url": "https://github.com/owner/repo1/pull/101",
+                "created_at": "2026-09-23T10:00:00Z",
+                "updated_at": "2026-09-23T10:15:00Z"
+            }
+        ]
+
+        # Second refresh: SHA and updated_at changed, must call get_pr_review_summary
+        repo_service.refresh_pr_cache()
+        self.assertEqual(self.gh_client.get_pr_review_summary.call_count, 2)
+
 if __name__ == "__main__":
     unittest.main()
 

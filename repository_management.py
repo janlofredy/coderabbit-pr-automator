@@ -72,6 +72,73 @@ class RepositoryManagementService:
         with self._activity("REMOVING_REPOSITORY", f"Removing {full_name} from the repository list"):
             return self.config_manager.remove_repo(full_name)
 
+    def _build_pr_item(
+        self,
+        full_name: str,
+        pr: Dict[str, Any],
+        auth_user: Optional[str] = None,
+        cached_entry: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Builds a cached PR dictionary, reusing cached review summary if PR has not changed."""
+        num = pr.get("number")
+        pr_key = f"{full_name}#{num}"
+        author = (pr.get("user") or {}).get("login", "")
+        is_own = bool(auth_user and author.lower() == auth_user.lower())
+        head_sha = (pr.get("head") or {}).get("sha", "")
+        updated_at = pr.get("updated_at", "")
+
+        # Check if we can reuse previous review summary (Delta Caching)
+        # If head_sha and updated_at match an existing cached PR entry, no new commits or events occurred
+        if cached_entry and cached_entry.get("head_sha") == head_sha and cached_entry.get("updated_at") == updated_at:
+            review_summary = {
+                "has_other_changes_requested": cached_entry.get("has_other_changes_requested", False),
+                "other_changes_requested_by": cached_entry.get("other_changes_requested_by", []),
+                "other_approved_by": cached_entry.get("other_approved_by", []),
+                "other_commented_by": cached_entry.get("other_commented_by", []),
+                "has_other_commented": cached_entry.get("has_other_commented", False),
+                "has_user_auto_approved": cached_entry.get("has_user_auto_approved", False),
+                "has_user_manually_approved": cached_entry.get("has_user_manually_approved", False),
+                "has_check_error": cached_entry.get("has_check_error", False),
+                "failed_checks": cached_entry.get("failed_checks", []),
+                "has_conflict": cached_entry.get("has_conflict", False),
+                "mergeable_state": cached_entry.get("mergeable_state", "unknown"),
+                "has_user_reviewed": cached_entry.get("has_user_reviewed", False),
+                "user_review_state": cached_entry.get("user_review_state"),
+            }
+        else:
+            owner, repo_name = GitHubClient.split_repo(full_name)
+            review_summary = self.github_client.get_pr_review_summary(
+                owner, repo_name, num, commit_sha=head_sha, auth_user=auth_user
+            )
+
+        return {
+            "pr_key": pr_key,
+            "repo": full_name,
+            "number": num,
+            "title": pr.get("title", ""),
+            "author": author,
+            "is_own_pr": is_own,
+            "base_ref": (pr.get("base") or {}).get("ref", ""),
+            "head_ref": (pr.get("head") or {}).get("ref", ""),
+            "head_sha": head_sha,
+            "html_url": pr.get("html_url", ""),
+            "created_at": pr.get("created_at", ""),
+            "updated_at": updated_at,
+            "has_other_changes_requested": review_summary.get("has_other_changes_requested", False),
+            "other_changes_requested_by": review_summary.get("other_changes_requested_by", []),
+            "other_approved_by": review_summary.get("other_approved_by", []),
+            "other_commented_by": review_summary.get("other_commented_by", []),
+            "has_other_commented": review_summary.get("has_other_commented", False),
+            "has_user_auto_approved": review_summary.get("has_user_auto_approved", False),
+            "has_user_manually_approved": review_summary.get("has_user_manually_approved", False),
+            "has_check_error": review_summary.get("has_check_error", False),
+            "failed_checks": review_summary.get("failed_checks", []),
+            "has_conflict": review_summary.get("has_conflict", False),
+            "mergeable_state": review_summary.get("mergeable_state", "unknown"),
+            "has_user_reviewed": review_summary.get("has_user_reviewed", False),
+            "user_review_state": review_summary.get("user_review_state"),
+        }
+
     def fetch_repo_prs(self, repo_info: Dict[str, Any]) -> List[Dict[str, Any]]:
         full_name = repo_info.get("full_name", "")
         if not full_name:
@@ -81,45 +148,30 @@ class RepositoryManagementService:
         try:
             prs = self.github_client.list_open_prs(owner, repo_name)
             auth_user = self.github_client.get_username()
-            results = []
 
-            for pr in prs:
-                num = pr.get("number")
-                pr_key = f"{full_name}#{num}"
-                author = (pr.get("user") or {}).get("login", "")
-                is_own = bool(auth_user and author.lower() == auth_user.lower())
-                head_sha = (pr.get("head") or {}).get("sha", "")
-                review_summary = self.github_client.get_pr_review_summary(
-                    owner, repo_name, num, commit_sha=head_sha, auth_user=auth_user
+            # Build a lookup of existing cached PRs for fast delta matching
+            with self._cache_lock:
+                cache_by_key = {p.get("pr_key"): dict(p) for p in self._cached_prs}
+
+            # Fetch PR details concurrently using thread pool
+            futures = [
+                self._executor.submit(
+                    self._build_pr_item,
+                    full_name,
+                    pr,
+                    auth_user,
+                    cache_by_key.get(f"{full_name}#{pr.get('number')}"),
                 )
+                for pr in prs
+            ]
 
-                results.append({
-                    "pr_key": pr_key,
-                    "repo": full_name,
-                    "number": num,
-                    "title": pr.get("title", ""),
-                    "author": author,
-                    "is_own_pr": is_own,
-                    "base_ref": (pr.get("base") or {}).get("ref", ""),
-                    "head_ref": (pr.get("head") or {}).get("ref", ""),
-                    "head_sha": head_sha,
-                    "html_url": pr.get("html_url", ""),
-                    "created_at": pr.get("created_at", ""),
-                    "updated_at": pr.get("updated_at", ""),
-                    "has_other_changes_requested": review_summary.get("has_other_changes_requested", False),
-                    "other_changes_requested_by": review_summary.get("other_changes_requested_by", []),
-                    "other_approved_by": review_summary.get("other_approved_by", []),
-                    "other_commented_by": review_summary.get("other_commented_by", []),
-                    "has_other_commented": review_summary.get("has_other_commented", False),
-                    "has_user_auto_approved": review_summary.get("has_user_auto_approved", False),
-                    "has_user_manually_approved": review_summary.get("has_user_manually_approved", False),
-                    "has_check_error": review_summary.get("has_check_error", False),
-                    "failed_checks": review_summary.get("failed_checks", []),
-                    "has_conflict": review_summary.get("has_conflict", False),
-                    "mergeable_state": review_summary.get("mergeable_state", "unknown"),
-                    "has_user_reviewed": review_summary.get("has_user_reviewed", False),
-                    "user_review_state": review_summary.get("user_review_state"),
-                })
+            results = []
+            for f in futures:
+                try:
+                    results.append(f.result())
+                except Exception as e:
+                    logger.warning("Error building PR item for %s: %s", full_name, e)
+
             return results
         except Exception as e:
             logger.warning("Error fetching PRs for %s: %s", full_name, e)
