@@ -1648,8 +1648,6 @@
                         ${repoPRs.map(pr => {
                 const isOngoing = activePrKey === pr.pr_key;
                 const isQueued = queuedPrKeys.has(pr.pr_key);
-                const otherApproved = (pr.other_approved_by || []).length > 0 ? `<span>👍 Approved by: <strong>${escapeHtml(pr.other_approved_by.join(', '))}</strong></span>` : '';
-
                 // Generate status pills
                 const pills = [];
 
@@ -1668,27 +1666,34 @@
                     pills.push(`<span class="badge badge-blue">👤 Manually Approved by you</span>`);
                 }
 
-                // 4. Changes requested by others
+                // 4. Approved by other reviewers
+                if ((pr.other_approved_by || []).length > 0) {
+                    (pr.other_approved_by || []).forEach(name => {
+                        pills.push(`<span class="badge badge-green">👍 Approved by ${escapeHtml(name)}</span>`);
+                    });
+                }
+
+                // 5. Changes requested by others
                 if (pr.has_other_changes_requested && (pr.other_changes_requested_by || []).length > 0) {
                     (pr.other_changes_requested_by || []).forEach(name => {
                         pills.push(`<span class="badge badge-red">❌ Changes Requested by ${escapeHtml(name)}</span>`);
                     });
                 }
 
-                // 5. Commented by each reviewer/person
+                // 6. Commented by each reviewer/person
                 if (pr.has_other_commented && (pr.other_commented_by || []).length > 0) {
                     (pr.other_commented_by || []).forEach(name => {
                         pills.push(`<span class="badge badge-yellow">💬 Commented by ${escapeHtml(name)}</span>`);
                     });
                 }
 
-                // 6. Check Error
+                // 7. Check Error
                 if (pr.has_check_error) {
                     const failList = (pr.failed_checks || []).join(', ');
                     pills.push(`<span class="badge badge-red"${failList ? ` title="${escapeHtml(failList)}"` : ''}>⚠️ Check Error</span>`);
                 }
 
-                // 7. Merge Conflict
+                // 8. Merge Conflict
                 if (pr.has_conflict) {
                     pills.push(`<span class="badge badge-red" title="This pull request has merge conflicts that must be resolved">⚠️ Merge Conflict</span>`);
                 }
@@ -1707,7 +1712,6 @@
                             <span>👤 <strong>${escapeHtml(pr.author)}</strong></span>
                             <span>🌱 <code>${escapeHtml(pr.head_ref)}</code></span>
                             <span>#️⃣ <code>${(pr.head_sha || '').substring(0, 7)}</code></span>
-                            ${otherApproved}
                         </div>
                         <div class="pr-status-pills">
                             ${pills.join('')}

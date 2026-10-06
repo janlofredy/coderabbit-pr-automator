@@ -788,26 +788,33 @@
                 pills.push(`<span class="badge badge-blue">👤 Manually Approved</span>`);
             }
 
-            // 4. Changes Requested by others
+            // 4. Approved by other reviewers
+            if ((pr.other_approved_by || []).length > 0) {
+                (pr.other_approved_by || []).forEach(name => {
+                    pills.push(`<span class="badge badge-green">👍 Approved by ${escapeHtml(name)}</span>`);
+                });
+            }
+
+            // 5. Changes Requested by others
             if (pr.has_other_changes_requested && (pr.other_changes_requested_by || []).length > 0) {
                 (pr.other_changes_requested_by || []).forEach(name => {
                     pills.push(`<span class="badge badge-red">❌ Changes Requested by ${escapeHtml(name)}</span>`);
                 });
             }
 
-            // 5. Commented by each reviewer/person
+            // 6. Commented by each reviewer/person
             if (pr.has_other_commented && (pr.other_commented_by || []).length > 0) {
                 (pr.other_commented_by || []).forEach(name => {
                     pills.push(`<span class="badge badge-yellow">💬 Commented by ${escapeHtml(name)}</span>`);
                 });
             }
 
-            // 6. Check Error
+            // 7. Check Error
             if (pr.has_check_error) {
                 pills.push(`<span class="badge badge-red">⚠️ Check Error</span>`);
             }
 
-            // 7. Merge Conflict
+            // 8. Merge Conflict
             if (pr.has_conflict) {
                 pills.push(`<span class="badge badge-red">⚠️ Merge Conflict</span>`);
             }

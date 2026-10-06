@@ -210,6 +210,27 @@ class TestDashboardBackend(unittest.TestCase):
         self.assertTrue(pr["has_other_changes_requested"])
         self.assertEqual(pr["other_changes_requested_by"], ["alice", "bob"])
 
+    def test_other_approved_by_tracking(self):
+        self.gh_client.get_pr_review_summary.return_value = {
+            "has_other_changes_requested": False,
+            "other_changes_requested_by": [],
+            "other_approved_by": ["reviewer1", "reviewer2"],
+            "other_commented_by": ["reviewer3"],
+            "has_other_commented": True,
+            "has_user_auto_approved": False,
+            "has_user_manually_approved": False,
+            "has_check_error": False,
+            "failed_checks": [],
+            "has_user_reviewed": False,
+            "user_review_state": None
+        }
+        self.backend.refresh_pr_cache()
+        status = self.backend.get_annotated_status()
+        pr = status["pull_requests"][0]
+        self.assertEqual(pr["other_approved_by"], ["reviewer1", "reviewer2"])
+        self.assertEqual(pr["other_commented_by"], ["reviewer3"])
+        self.assertTrue(pr["has_other_commented"])
+
     def test_http_endpoints(self):
         import web_dashboard
         import urllib.request
