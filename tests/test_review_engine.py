@@ -179,6 +179,16 @@ class TestReviewEngine(unittest.TestCase):
         self.assertNotIn("Attempt", body)
         self.assertNotIn("coderabbit-bot", body)
 
+        # Verify rate limit attempt was recorded in PR logs
+        logs = self.state_mgr.get_pr_logs("owner/my-repo#9")
+        self.assertEqual(len(logs), 1)
+        rl_log = logs[0]
+        self.assertEqual(rl_log["status"], "RATE_LIMITED")
+        self.assertEqual(rl_log["review_outcome"], "RATE_LIMITED")
+        self.assertEqual(rl_log["attempt"], 1)
+        self.assertEqual(rl_log["stderr"], rate_limit_cli_output)
+        self.assertIn("rate limit", rl_log["error"].lower())
+
     def test_strict_approval_blocks_approval_on_minor_issue(self):
         self.gh_client.get_username.return_value = "coderabbit-bot"
         self.gh_client.has_user_reviewed_sha.return_value = (False, None)

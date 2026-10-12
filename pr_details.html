@@ -838,7 +838,8 @@
                 const date = log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : 'Recent';
                 const outcome = log.review_outcome || log.status || 'UNKNOWN';
                 const isErr = outcome === 'ERROR';
-                const badgeClass = isErr ? 'badge-red' : (outcome.includes('APPROVED') ? 'badge-green' : 'badge-yellow');
+                const isRateLimited = outcome === 'RATE_LIMITED';
+                const badgeClass = isErr ? 'badge-red' : (isRateLimited ? 'badge-orange' : (outcome.includes('APPROVED') ? 'badge-green' : 'badge-yellow'));
                 const activeClass = index === selectedRunIndex ? 'active' : '';
 
                 const accBadge = log.coderabbit_account ? `<span>👤 <strong>${escapeHtml(log.coderabbit_account)}</strong></span>` : '';

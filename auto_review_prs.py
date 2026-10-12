@@ -752,6 +752,29 @@ class AutoReviewEngine:
                 "author": pr_author,
                 "is_own_pr": is_own_pr
             }
+            self.state_manager.record_pr_log(pr_key, {
+                "status": "RATE_LIMITED",
+                "review_outcome": "RATE_LIMITED",
+                "coderabbit_account": account_name,
+                "account_id": account_id,
+                "retcode": retcode,
+                "elapsed_seconds": round(elapsed, 1),
+                "attempt": attempt,
+                "head_sha": head_sha,
+                "base_ref": base_ref,
+                "head_ref": head_ref,
+                "author": pr_author,
+                "title": pr.get("title", ""),
+                "html_url": pr.get("html_url", ""),
+                "file_count": file_count,
+                "retry_delay_seconds": delay_sec,
+                "retry_at": resume_time,
+                "reason": reason_msg,
+                "summary": f"⏳ Rate limit or quota hit ({reason_msg}). Automated review delayed by {mins}m (retry at {resume_time}).",
+                "stdout": stdout,
+                "stderr": stderr,
+                "error": reason_msg
+            })
             self.state_manager.record_pr_status(pr_key, status_data)
             return status_data
 
