@@ -2030,6 +2030,14 @@
                     <div style="font-size: 0.76rem; color: var(--text-muted);">
                         ${typeLabel}
                     </div>
+                    ${acc.verified_username ? `
+                    <div style="font-size: 0.76rem; color: #38bdf8; display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; background: rgba(56, 189, 248, 0.08); padding: 0.3rem 0.5rem; border-radius: 4px;">
+                        <span>👤 Signed in: <strong>${escapeHtml(acc.verified_username)}</strong>${acc.verified_email ? ` (${escapeHtml(acc.verified_email)})` : ''}</span>
+                        ${acc.verified_orgs && acc.verified_orgs.length ? `<span style="opacity: 0.85;">• Orgs: ${escapeHtml(acc.verified_orgs.join(', '))}</span>` : ''}
+                    </div>` : `
+                    <div style="font-size: 0.74rem; color: var(--text-muted); opacity: 0.8;">
+                        <span>👤 Identity: Click <strong>🧪 Test</strong> to probe authenticated user & orgs</span>
+                    </div>`}
                     <div id="acc-test-result-${acc.id}" style="display: none; font-size: 0.75rem; padding: 0.35rem 0.5rem; border-radius: 4px; margin-top: 0.2rem;"></div>
                 </div>
             `;
@@ -2190,7 +2198,11 @@
                 if (data.authenticated) {
                     resultEl.style.background = 'rgba(16, 185, 129, 0.15)';
                     resultEl.style.color = '#34d399';
-                    resultEl.innerHTML = '✅ Authenticated successfully! Ready for reviews.';
+                    const userStr = data.user ? `Signed in as <strong>${escapeHtml(data.user.username || data.user.name || '')}</strong> (${escapeHtml(data.user.email || '')})` : 'Authenticated successfully!';
+                    const orgStr = (data.organizations && data.organizations.length) ? `<br><span style="opacity: 0.85;">🏢 Orgs: ${escapeHtml(data.organizations.join(', '))}</span>` : '';
+                    const regStr = data.region ? ` <span style="opacity: 0.75;">[${escapeHtml(data.region.toUpperCase())}]</span>` : '';
+                    resultEl.innerHTML = `✅ ${userStr}${regStr}${orgStr}`;
+                    await loadCoderabbitAccounts();
                 } else {
                     resultEl.style.background = 'rgba(239, 68, 68, 0.15)';
                     resultEl.style.color = '#f87171';
@@ -2228,11 +2240,17 @@
             }
             const message = document.getElementById('coderabbit-auth-message');
             if (message) {
-                message.textContent = state.status === 'authenticated'
-                    ? 'Connected. The CodeRabbit CLI reports an active default login.'
-                    : state.status === 'needs_auth'
-                        ? 'No active default CLI login was found (Add an account below).'
-                        : 'Could not read default CodeRabbit CLI auth status.';
+                if (state.status === 'authenticated') {
+                    const u = state.user || {};
+                    const uText = u.username || u.name || u.email;
+                    const uEmail = u.email && u.email !== uText ? ` (${u.email})` : '';
+                    const orgsText = state.organizations && state.organizations.length ? ` • Orgs: ${state.organizations.join(', ')}` : '';
+                    message.innerHTML = `Connected as <strong>${escapeHtml(uText || 'Default Account')}</strong>${escapeHtml(uEmail)}${escapeHtml(orgsText)}`;
+                } else if (state.status === 'needs_auth') {
+                    message.textContent = 'No active default CLI login was found (Add an account below).';
+                } else {
+                    message.textContent = 'Could not read default CodeRabbit CLI auth status.';
+                }
             }
         } catch (_) {
             const pill = document.getElementById('coderabbit-auth-pill');

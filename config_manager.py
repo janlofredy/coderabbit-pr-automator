@@ -403,6 +403,12 @@ class ConfigManager:
             target["region"] = updates["region"].strip().lower()
         if "enabled" in updates:
             target["enabled"] = bool(updates["enabled"])
+        if "verified_username" in updates:
+            target["verified_username"] = updates["verified_username"]
+        if "verified_email" in updates:
+            target["verified_email"] = updates["verified_email"]
+        if "verified_orgs" in updates:
+            target["verified_orgs"] = updates["verified_orgs"]
 
         cfg["coderabbit_accounts"] = accounts
         self.save_config(cfg)

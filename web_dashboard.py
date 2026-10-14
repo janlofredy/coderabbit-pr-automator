@@ -178,6 +178,10 @@ class DashboardBackend:
 
         authenticated = False
         status = "needs_auth"
+        user_info = None
+        current_org = None
+        orgs = []
+        region = account.get("region", "us")
         for line in result.stdout.splitlines():
             try:
                 event = json.loads(line)
@@ -187,18 +191,44 @@ class DashboardBackend:
                 if event.get("authenticated") is True:
                     authenticated = True
                     status = "authenticated"
+                    user_info = event.get("user")
+                    current_org = event.get("currentOrg", {}).get("name") if isinstance(event.get("currentOrg"), dict) else None
+                    orgs = [o.get("name") for o in event.get("organizations", []) if isinstance(o, dict) and o.get("name")]
+                    if event.get("region"):
+                        region = event.get("region")
                 elif event.get("authenticated") is False:
                     authenticated = False
                     status = "needs_auth"
                 break
 
-        return {"authenticated": authenticated, "status": status, "output": result.stdout.strip()}
+        if authenticated and account.get("id"):
+            u_name = (user_info.get("username") or user_info.get("name") or "") if isinstance(user_info, dict) else ""
+            u_email = (user_info.get("email") or "") if isinstance(user_info, dict) else ""
+            self.config_manager.update_coderabbit_account(
+                account["id"],
+                {
+                    "verified_username": u_name,
+                    "verified_email": u_email,
+                    "verified_orgs": orgs,
+                }
+            )
 
-    def get_coderabbit_auth_status(self) -> Dict[str, str]:
+        return {
+            "authenticated": authenticated,
+            "status": status,
+            "user": user_info,
+            "current_org": current_org,
+            "organizations": orgs,
+            "region": region,
+            "output": result.stdout.strip()
+        }
+
+    def get_coderabbit_auth_status(self) -> Dict[str, Any]:
         """Return a sanitized, briefly cached status from the official CLI."""
         with self._auth_lock:
-            if time.monotonic() - self._auth_status_cache["checked_at"] < 30:
-                return {"status": self._auth_status_cache["status"]}
+            cached = self._auth_status_cache
+            if time.monotonic() - cached.get("checked_at", 0) < 30 and cached.get("status") != "checking":
+                return {k: v for k, v in cached.items() if k != "checked_at"}
             try:
                 result = subprocess.run(
                     ["coderabbit", "auth", "status", "--agent"],
@@ -208,11 +238,14 @@ class DashboardBackend:
                     check=False,
                 )
             except FileNotFoundError:
-                status = "unavailable"
+                status_data = {"status": "unavailable", "message": "CodeRabbit CLI not installed"}
             except subprocess.TimeoutExpired:
-                status = "unavailable"
+                status_data = {"status": "unavailable", "message": "Authentication check timed out"}
             else:
                 status = "unavailable"
+                user_info = None
+                current_org = None
+                orgs = []
                 for line in result.stdout.splitlines():
                     try:
                         event = json.loads(line)
@@ -221,11 +254,20 @@ class DashboardBackend:
                     if isinstance(event, dict) and event.get("phase") == "auth":
                         if event.get("authenticated") is True:
                             status = "authenticated"
+                            user_info = event.get("user")
+                            current_org = event.get("currentOrg", {}).get("name") if isinstance(event.get("currentOrg"), dict) else None
+                            orgs = [o.get("name") for o in event.get("organizations", []) if isinstance(o, dict) and o.get("name")]
                         elif event.get("authenticated") is False:
                             status = "needs_auth"
                         break
-            self._auth_status_cache = {"status": status, "checked_at": time.monotonic()}
-            return {"status": status}
+                status_data = {
+                    "status": status,
+                    "user": user_info,
+                    "current_org": current_org,
+                    "organizations": orgs,
+                }
+            self._auth_status_cache = {**status_data, "checked_at": time.monotonic()}
+            return status_data
 
     def get_annotated_status(self) -> Dict[str, Any]:
         """Overlays real-time state manager data onto cached PR records for sub-millisecond response."""
@@ -397,6 +439,9 @@ class DashboardBackend:
                     "api_key_masked": f"{a.get('api_key')[:4]}...{a.get('api_key')[-4:]}" if a.get("api_key") and len(a.get("api_key")) > 8 else ("configured" if a.get("api_key") else ""),
                     "rate_limited": self.state_manager.is_account_rate_limited(a.get("id", ""))[0],
                     "cooldown_remaining": self.state_manager.is_account_rate_limited(a.get("id", ""))[1],
+                    "verified_username": a.get("verified_username"),
+                    "verified_email": a.get("verified_email"),
+                    "verified_orgs": a.get("verified_orgs", []),
                 }
                 for a in config.get("coderabbit_accounts", [])
             ],
@@ -574,6 +619,9 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     "rate_limited": is_rl,
                     "cooldown_remaining": rem,
                     "rate_limit_reason": reason,
+                    "verified_username": a.get("verified_username"),
+                    "verified_email": a.get("verified_email"),
+                    "verified_orgs": a.get("verified_orgs", []),
                 })
             self._set_headers(200)
             self.wfile.write(json.dumps(safe_accounts).encode("utf-8"))
