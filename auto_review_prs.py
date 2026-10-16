@@ -708,8 +708,13 @@ class AutoReviewEngine:
         elapsed = time.time() - start_time
         combined_output = f"{stdout}\n{stderr}"
 
+        # Parse findings to check if review actually succeeded
+        parsed = self.parse_coderabbit_output(stdout) if retcode == 0 else {"valid": False}
+
         # Rate Limit / Quota / Timeout Detection
-        retry_delay = self.state_manager.parse_retry_delay_from_text(combined_output)
+        # If the review completed successfully with exit code 0, do not falsely flag rate limit based on code findings in stdout.
+        scan_text = stderr if parsed.get("valid") else combined_output
+        retry_delay = self.state_manager.parse_retry_delay_from_text(scan_text)
         is_timeout = retcode == -1 or "TimeoutExpired" in stderr
 
         if retry_delay > 0 or is_timeout:

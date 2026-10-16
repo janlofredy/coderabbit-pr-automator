@@ -119,8 +119,17 @@ class StateManager:
             return max(10, int(header_match.group(1)))
 
         # Rate limit or quota keywords detected without explicit duration
-        keywords = ["429", "rate limit", "rate-limit", "rate_limit", "too many requests", "quota", "exhausted", "throttled"]
-        if any(k in text for k in keywords):
+        # Use regex word boundaries and avoid single generic code words (e.g. 'throttled')
+        keyword_patterns = [
+            r"\b429\b",
+            r"\brate[-_\s]?limit\b",
+            r"\btoo\s+many\s+requests\b",
+            r"\bquota\s+(?:exceeded|exhausted|reached|limit)\b",
+            r"\b(?:exceeded|exhausted)\s+quota\b",
+            r"\brequest\s+throttled\b",
+            r"\bthrottling\s+active\b",
+        ]
+        if any(re.search(pat, text) for pat in keyword_patterns):
             return default_delay
 
         return 0

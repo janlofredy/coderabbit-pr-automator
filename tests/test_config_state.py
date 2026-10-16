@@ -79,6 +79,10 @@ class TestConfigAndStateManager(unittest.TestCase):
         out5 = "Review complete: 0 findings detected."
         self.assertEqual(StateManager.parse_retry_delay_from_text(out5), 0)
 
+        # Code filenames and review comments with words like 'throttled' should NOT trigger rate limit
+        out6 = '{"type":"finding","fileName":"app/Rules/ThrottledCurrentPassword.php","comment":"Check throttled password"}'
+        self.assertEqual(StateManager.parse_retry_delay_from_text(out6), 0)
+
     def test_state_rate_limit_and_attempts(self):
         sm = StateManager(state_path=self.state_path)
         is_active, remaining, reason = sm.is_rate_limit_active()

@@ -263,6 +263,42 @@ class TestReviewEngine(unittest.TestCase):
         self.assertEqual(res["review_outcome"], "APPROVED")
         self.assertEqual(res["minor_count"], 1)
 
+    def test_successful_review_with_throttled_code_words_not_rate_limited(self):
+        self.gh_client.get_username.return_value = "coderabbit-bot"
+        self.gh_client.has_user_reviewed_sha.return_value = (False, None)
+        self.gh_client.create_or_update_comment.return_value = {"id": 801}
+        self.gh_client.submit_pull_request_review.return_value = {"id": 802}
+
+        repo_info = {"full_name": "owner/my-repo", "path": os.path.join(self.repos_dir, "owner/my-repo")}
+        pr = {
+            "number": 15,
+            "title": "Add throttled password check",
+            "changed_files": 1,
+            "user": {"login": "contributor"},
+            "base": {"ref": "main"},
+            "head": {"ref": "patch-3", "sha": "aabbccdd"},
+            "html_url": "https://github.com/owner/my-repo/pull/15"
+        }
+
+        # Event stream that contains findings with 'throttled' in fileName/comments
+        event_stream = '\n'.join([
+            '{"type":"review_context","reviewType":"all","expectedDuration":"Reviews usually take 2-6 minutes and can take up to 15."}',
+            '{"type":"finding","severity":"minor","fileName":"app/Rules/ThrottledCurrentPassword.php","comment":"Check throttled password logic"}',
+            '{"type":"complete","status":"review_completed","findings":1,"outcome":"completed","message":"Review completed"}'
+        ])
+
+        with patch.object(self.engine, "prepare_repo", return_value=True), \
+             patch.object(self.engine, "checkout_pr", return_value=True), \
+             patch.object(self.engine, "count_changed_files", return_value=1), \
+             patch.object(self.engine, "get_valid_diff_lines", return_value={}), \
+             patch.object(self.engine, "execute_coderabbit_cli", return_value=(0, event_stream, "")):
+
+            res = self.engine.review_single_pr(repo_info, pr)
+
+        self.assertEqual(res["status"], "COMPLETED")
+        is_active, _, _ = self.state_mgr.is_rate_limit_active()
+        self.assertFalse(is_active)
+
     def test_clean_pr_approved_in_strict_mode(self):
         self.gh_client.get_username.return_value = "coderabbit-bot"
         self.gh_client.has_user_reviewed_sha.return_value = (False, None)
