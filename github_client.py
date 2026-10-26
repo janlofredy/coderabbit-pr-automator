@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import logging
 import urllib.request
@@ -8,6 +9,10 @@ from typing import Dict, Any, List, Optional, Tuple
 logger = logging.getLogger("github_client")
 
 GITHUB_API_BASE = "https://api.github.com"
+
+AUTHOR_APPROVAL_PATTERN = re.compile(
+    r"(?i)\b(lgtm|looks\s+good(?:\s+to\s+merge)?|approved|ready\s+to\s+merge|self[- ]approved|go\s+ahead\s+and\s+merge)\b"
+)
 
 class GitHubClient:
     """GitHub REST API Client using Python standard library."""
@@ -430,16 +435,19 @@ class GitHubClient:
 
         return False, None
 
-    def get_pr_review_summary(self, owner: str, repo: str, pr_number: int, commit_sha: str = "", auth_user: Optional[str] = None) -> Dict[str, Any]:
+    def get_pr_review_summary(self, owner: str, repo: str, pr_number: int, commit_sha: str = "", auth_user: Optional[str] = None, pr_author: Optional[str] = None) -> Dict[str, Any]:
         """
         Inspects all reviews, comments, and CI check runs on a PR to detect:
         1. Whether any reviewer requested changes (and who).
         2. Whether the PR is Auto Approved by You (CodeRabbit automated review on current SHA).
         3. Whether the PR is Manually Approved by you (human GitHub approval without automated signature).
         4. Whether other reviewers commented on the PR.
-        5. Whether any CI checks have errors/failures.
+        5. Whether the author approved in text or commented/replied.
+        6. Whether any CI checks have errors/failures.
         """
         user = (auth_user or self.get_username() or "").lower()
+        author_lower = (pr_author or "").strip().lower()
+        author_text_approved = False
         short_sha = commit_sha[:8] if commit_sha else ""
 
         other_changes_requested = []
@@ -465,9 +473,15 @@ class GitHubClient:
                 reviewer_login = (r.get("user") or {}).get("login") or rev_lower
                 state = (r.get("state") or "").upper()
                 r_commit = r.get("commit_id", "")
-                body = r.get("body", "")
+                body = r.get("body", "") or ""
                 commit_matched = bool(not commit_sha or r_commit == commit_sha or (short_sha and r_commit.startswith(short_sha)))
                 is_cr_auto = ("🐰" in body) or ("CodeRabbit" in body)
+
+                if author_lower and rev_lower == author_lower:
+                    if AUTHOR_APPROVAL_PATTERN.search(body):
+                        author_text_approved = True
+                        if reviewer_login not in other_approved:
+                            other_approved.append(reviewer_login)
 
                 if user and rev_lower == user:
                     if state == "APPROVED":
@@ -500,7 +514,8 @@ class GitHubClient:
                     if state == "CHANGES_REQUESTED":
                         other_changes_requested.append(reviewer_login)
                     elif state == "APPROVED":
-                        other_approved.append(reviewer_login)
+                        if reviewer_login not in other_approved:
+                            other_approved.append(reviewer_login)
                     elif state == "COMMENTED":
                         if not is_cr_auto and "coderabbit" not in rev_lower:
                             other_commented.add(reviewer_login)
@@ -522,10 +537,26 @@ class GitHubClient:
             comments = self.get_comments_for_pr(owner, repo, pr_number)
             for c in comments:
                 c_user = ((c.get("user") or {}).get("login") or "").strip()
-                if c_user and (not user or c_user.lower() != user) and "coderabbit" not in c_user.lower():
-                    other_commented.add(c_user)
+                c_body = c.get("body", "") or ""
+                if not c_user or "coderabbit" in c_user.lower():
+                    continue
+                if user and c_user.lower() == user:
+                    continue
+
+                if author_lower and c_user.lower() == author_lower:
+                    if AUTHOR_APPROVAL_PATTERN.search(c_body):
+                        author_text_approved = True
+                        if c_user not in other_approved:
+                            other_approved.append(c_user)
+                        continue
+
+                other_commented.add(c_user)
         except Exception as e:
             logger.debug("Could not fetch issue comments for PR #%s: %s", pr_number, e)
+
+        # If author approved in text, ensure author is listed in approvals and not comments
+        if author_text_approved and author_lower:
+            other_commented = {u for u in other_commented if u.lower() != author_lower}
 
         # Check CI check runs for errors and status
         check_summary = self.get_check_runs_summary(owner, repo, commit_sha) if commit_sha else {"has_check_error": False, "failed_checks": [], "checks_status": None}
@@ -541,6 +572,7 @@ class GitHubClient:
             "has_other_commented": len(other_commented) > 0,
             "has_user_auto_approved": user_auto_approved,
             "has_user_manually_approved": user_manually_approved,
+            "author_approved_in_text": author_text_approved,
             "has_check_error": check_summary.get("has_check_error", False),
             "failed_checks": check_summary.get("failed_checks", []),
             "checks_status": check_summary.get("checks_status", None),

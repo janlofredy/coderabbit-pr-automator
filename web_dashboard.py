@@ -388,6 +388,43 @@ class DashboardBackend:
                 bot_outcome = "APPROVED"
             item["bot_review_outcome"] = bot_outcome
             item["report_file"] = status_entry.get("report_file", "")
+
+            # Calculate distinct approvals
+            distinct_approvers = set()
+            for name in (item.get("other_approved_by") or []):
+                if name:
+                    distinct_approvers.add(name.strip().lower())
+
+            if is_auto_approved or item.get("has_user_auto_approved"):
+                distinct_approvers.add("__bot_auto_approval__")
+            if is_manual_approved or item.get("has_user_manually_approved"):
+                distinct_approvers.add("__user_manual_approval__")
+
+            total_approvals = len(distinct_approvers)
+            item["total_approvals"] = total_approvals
+
+            # Ready to merge criteria:
+            # 1. Total distinct approvals >= 2
+            # 2. No other changes requested and bot outcome is not CHANGES_REQUESTED
+            # 3. No merge conflict
+            # 4. Checks passed (checks_status is PASSED / SUCCESS, not ongoing, not failed, has_check_error is False)
+            checks_status = (item.get("checks_status") or "").strip().upper()
+            has_failed_checks = item.get("has_check_error", False) or (checks_status in ("FAILED", "CHECKS FAILED"))
+            has_ongoing_checks = checks_status in ("ONGOING", "CHECKS ONGOING", "PENDING")
+            checks_passed = (checks_status in ("PASSED", "CHECKS PASSED", "SUCCESS") or (checks_status == "" and not item.get("has_check_error", False)))
+            has_conflict = item.get("has_conflict", False)
+            bot_changes_req = (bot_outcome == "CHANGES_REQUESTED") or (item.get("status_badge") == "OTHER_CHANGES_REQUESTED")
+
+            is_ready_to_merge = bool(
+                total_approvals >= 2
+                and not has_other_changes
+                and not bot_changes_req
+                and not has_conflict
+                and not has_failed_checks
+                and not has_ongoing_checks
+                and checks_passed
+            )
+            item["ready_to_merge"] = is_ready_to_merge
             annotated_prs.append(item)
 
         # Sort PRs: Main > Staging > Develop > others, then by creation date descending
@@ -479,7 +516,9 @@ class DashboardBackend:
                 "report_file": pr_status.get("report_file", ""),
                 "checks_status": pr_status.get("checks_status", None),
                 "has_check_error": pr_status.get("has_check_error", False),
-                "failed_checks": pr_status.get("failed_checks", [])
+                "failed_checks": pr_status.get("failed_checks", []),
+                "ready_to_merge": False,
+                "total_approvals": 0
             }
 
         return {

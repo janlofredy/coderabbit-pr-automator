@@ -99,6 +99,7 @@ class RepositoryManagementService:
                 "has_other_commented": cached_entry.get("has_other_commented", False),
                 "has_user_auto_approved": cached_entry.get("has_user_auto_approved", False),
                 "has_user_manually_approved": cached_entry.get("has_user_manually_approved", False),
+                "author_approved_in_text": cached_entry.get("author_approved_in_text", False),
                 "has_check_error": cached_entry.get("has_check_error", False),
                 "failed_checks": cached_entry.get("failed_checks", []),
                 "checks_status": cached_entry.get("checks_status", None),
@@ -110,7 +111,7 @@ class RepositoryManagementService:
         else:
             owner, repo_name = GitHubClient.split_repo(full_name)
             review_summary = self.github_client.get_pr_review_summary(
-                owner, repo_name, num, commit_sha=head_sha, auth_user=auth_user
+                owner, repo_name, num, commit_sha=head_sha, auth_user=auth_user, pr_author=author
             )
 
         return {
@@ -133,6 +134,7 @@ class RepositoryManagementService:
             "has_other_commented": review_summary.get("has_other_commented", False),
             "has_user_auto_approved": review_summary.get("has_user_auto_approved", False),
             "has_user_manually_approved": review_summary.get("has_user_manually_approved", False),
+            "author_approved_in_text": review_summary.get("author_approved_in_text", False),
             "has_check_error": review_summary.get("has_check_error", False),
             "failed_checks": review_summary.get("failed_checks", []),
             "checks_status": review_summary.get("checks_status", None),

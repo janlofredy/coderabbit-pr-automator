@@ -727,6 +727,144 @@ class TestDashboardBackend(unittest.TestCase):
         self.assertIn("Checks Ongoing", details_html)
         self.assertIn("Checks Failed", details_html)
 
+    def test_ready_to_merge_calculation(self):
+        """Verify ready_to_merge triggers when total_approvals >= 2 and all checks/conflicts are clear."""
+        # Case 1: 2 approvals (bot auto approval + other reviewer), checks passed, no conflict -> READY TO MERGE
+        self.gh_client.get_pr_review_summary.return_value = {
+            "has_other_changes_requested": False,
+            "other_changes_requested_by": [],
+            "other_approved_by": ["senior-bot2"],
+            "other_commented_by": [],
+            "has_other_commented": False,
+            "has_user_auto_approved": True,
+            "has_user_manually_approved": False,
+            "has_check_error": False,
+            "failed_checks": [],
+            "checks_status": "PASSED",
+            "has_conflict": False,
+            "has_user_reviewed": True,
+            "user_review_state": "APPROVED"
+        }
+        self.backend.refresh_pr_cache()
+        status = self.backend.get_annotated_status()
+        pr = status["pull_requests"][0]
+        self.assertEqual(pr["total_approvals"], 2)
+        self.assertTrue(pr["ready_to_merge"])
+
+        # Case 2: Only 1 approval -> NOT ready to merge
+        self.backend.repository_service._cached_prs = []
+        self.gh_client.get_pr_review_summary.return_value = {
+            "has_other_changes_requested": False,
+            "other_changes_requested_by": [],
+            "other_approved_by": ["senior-bot2"],
+            "other_commented_by": [],
+            "has_other_commented": False,
+            "has_user_auto_approved": False,
+            "has_user_manually_approved": False,
+            "has_check_error": False,
+            "failed_checks": [],
+            "checks_status": "PASSED",
+            "has_conflict": False,
+            "has_user_reviewed": False,
+            "user_review_state": None
+        }
+        self.backend.refresh_pr_cache()
+        pr = self.backend.get_annotated_status()["pull_requests"][0]
+        self.assertEqual(pr["total_approvals"], 1)
+        self.assertFalse(pr["ready_to_merge"])
+
+        # Case 3: 2 approvals but checks ONGOING -> NOT ready to merge
+        self.backend.repository_service._cached_prs = []
+        self.gh_client.get_pr_review_summary.return_value["has_user_auto_approved"] = True
+        self.gh_client.get_pr_review_summary.return_value["checks_status"] = "ONGOING"
+        self.backend.refresh_pr_cache()
+        pr = self.backend.get_annotated_status()["pull_requests"][0]
+        self.assertEqual(pr["total_approvals"], 2)
+        self.assertFalse(pr["ready_to_merge"])
+
+        # Case 4: 2 approvals but merge conflict -> NOT ready to merge
+        self.backend.repository_service._cached_prs = []
+        self.gh_client.get_pr_review_summary.return_value["checks_status"] = "PASSED"
+        self.gh_client.get_pr_review_summary.return_value["has_conflict"] = True
+        self.backend.refresh_pr_cache()
+        pr = self.backend.get_annotated_status()["pull_requests"][0]
+        self.assertFalse(pr["ready_to_merge"])
+
+        # Case 5: 2 approvals but changes requested -> NOT ready to merge
+        self.backend.repository_service._cached_prs = []
+        self.gh_client.get_pr_review_summary.return_value["has_conflict"] = False
+        self.gh_client.get_pr_review_summary.return_value["has_other_changes_requested"] = True
+        self.gh_client.get_pr_review_summary.return_value["other_changes_requested_by"] = ["tech-lead"]
+        self.backend.refresh_pr_cache()
+        pr = self.backend.get_annotated_status()["pull_requests"][0]
+        self.assertFalse(pr["ready_to_merge"])
+
+    def test_author_text_approval_detection(self):
+        """Verify author in-text approval (LGTM, approved, etc.) counts as approval."""
+        client = GitHubClient(token="fake")
+
+        # Mock reviews
+        client.get_reviews_for_pr = MagicMock(return_value=[])
+
+        # Mock comments: author writes "LGTM, ready to merge!"
+        client.get_comments_for_pr = MagicMock(return_value=[
+            {
+                "user": {"login": "dev_author"},
+                "body": "Thanks for the review, LGTM ready to merge!"
+            },
+            {
+                "user": {"login": "peer_reviewer"},
+                "body": "Checking line 45"
+            }
+        ])
+        client.get_check_runs_summary = MagicMock(return_value={"has_check_error": False, "failed_checks": [], "checks_status": "PASSED"})
+        client.get_pr_mergeable_status = MagicMock(return_value={"has_conflict": False, "mergeable_state": "clean"})
+
+        summary = client.get_pr_review_summary(
+            owner="owner",
+            repo="repo",
+            pr_number=1,
+            commit_sha="sha123",
+            auth_user="bot_account",
+            pr_author="dev_author"
+        )
+        self.assertTrue(summary["author_approved_in_text"])
+        self.assertIn("dev_author", summary["other_approved_by"])
+        self.assertNotIn("dev_author", summary["other_commented_by"])
+        self.assertIn("peer_reviewer", summary["other_commented_by"])
+
+        # Non-approval comment from author
+        client.get_comments_for_pr = MagicMock(return_value=[
+            {
+                "user": {"login": "dev_author"},
+                "body": "I pushed an update to the styles."
+            }
+        ])
+        summary_regular = client.get_pr_review_summary(
+            owner="owner",
+            repo="repo",
+            pr_number=1,
+            commit_sha="sha123",
+            auth_user="bot_account",
+            pr_author="dev_author"
+        )
+        self.assertFalse(summary_regular["author_approved_in_text"])
+        self.assertNotIn("dev_author", summary_regular["other_approved_by"])
+        self.assertIn("dev_author", summary_regular["other_commented_by"])
+
+    def test_dashboard_and_pr_details_ready_to_merge_banner(self):
+        """Verify dashboard.html and pr_details.html contain READY TO MERGE banner styles and elements."""
+        with open("dashboard.html", "r", encoding="utf-8") as f:
+            dash_html = f.read()
+        self.assertIn("ready-to-merge-banner", dash_html)
+        self.assertIn("READY TO MERGE", dash_html)
+
+        with open("pr_details.html", "r", encoding="utf-8") as f:
+            details_html = f.read()
+        self.assertIn("ready-to-merge-banner", details_html)
+        self.assertIn("ready-to-merge-container", details_html)
+        self.assertIn("READY TO MERGE", details_html)
+
 if __name__ == "__main__":
     unittest.main()
 

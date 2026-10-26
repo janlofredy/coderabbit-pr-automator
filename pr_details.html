@@ -198,6 +198,40 @@
         .badge-purple { background-color: rgba(139, 92, 246, 0.15); color: #a78bfa; border: 1px solid rgba(139, 92, 246, 0.3); }
         .badge-gray { background-color: rgba(156, 163, 175, 0.15); color: #9ca3af; border: 1px solid rgba(156, 163, 175, 0.3); }
 
+        .ready-to-merge-banner {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: linear-gradient(135deg, rgba(16, 185, 129, 0.22), rgba(5, 150, 105, 0.12));
+            border: 1.5px solid #10b981;
+            box-shadow: 0 0 14px rgba(16, 185, 129, 0.35);
+            border-radius: 8px;
+            padding: 0.6rem 0.9rem;
+            margin-bottom: 0.85rem;
+            color: #34d399;
+            font-weight: 700;
+            font-size: 0.9rem;
+        }
+
+        .ready-to-merge-banner .rtm-title {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            font-size: 0.92rem;
+            font-weight: 700;
+            letter-spacing: 0.03em;
+        }
+
+        .ready-to-merge-banner .rtm-sub {
+            font-size: 0.75rem;
+            font-weight: 500;
+            color: #a7f3d0;
+            background: rgba(16, 185, 129, 0.2);
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            border: 1px solid rgba(16, 185, 129, 0.3);
+        }
+
         .btn {
             display: inline-flex;
             align-items: center;
@@ -545,6 +579,7 @@
 
         <!-- PR Header Details -->
         <div class="pr-header-card">
+            <div id="ready-to-merge-container" style="display: none;"></div>
             <div class="pr-title-row">
                 <div class="pr-title-group">
                     <h1 class="pr-title" id="pr-title">Loading Pull Request Details...</h1>
@@ -771,6 +806,21 @@
         }
 
         function renderStatusPills(pr, status) {
+            const rtmContainer = document.getElementById('ready-to-merge-container');
+            if (rtmContainer) {
+                if (pr.ready_to_merge) {
+                    rtmContainer.innerHTML = `
+                    <div class="ready-to-merge-banner">
+                        <span class="rtm-title">🚀 READY TO MERGE</span>
+                        <span class="rtm-sub">${pr.total_approvals || 2}+ Approvals • Checks Passed</span>
+                    </div>`;
+                    rtmContainer.style.display = 'block';
+                } else {
+                    rtmContainer.innerHTML = '';
+                    rtmContainer.style.display = 'none';
+                }
+            }
+
             const container = document.getElementById('pr-status-pills');
             const pills = [];
 
