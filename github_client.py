@@ -273,27 +273,63 @@ class GitHubClient:
 
     def get_check_runs_summary(self, owner: str, repo: str, commit_sha: str) -> Dict[str, Any]:
         """
-        Retrieves CI check runs for a commit to detect failures/errors.
-        Returns: { 'has_check_error': bool, 'failed_checks': List[str] }
+        Retrieves CI check runs for a commit to detect failures/errors and checks status.
+        Returns: { 'has_check_error': bool, 'failed_checks': List[str], 'checks_status': Optional[str] }
+        checks_status is one of: 'PASSED', 'ONGOING', 'FAILED', or None (if no checks).
         """
         if not commit_sha:
-            return {"has_check_error": False, "failed_checks": []}
+            return {"has_check_error": False, "failed_checks": [], "checks_status": None}
         try:
             res = self._request("GET", f"/repos/{owner}/{repo}/commits/{commit_sha}/check-runs")
             check_runs = res.get("check_runs", []) if isinstance(res, dict) else []
             failed = []
+            ongoing = []
+            passed = []
             for cr in check_runs:
+                status = (cr.get("status") or "").lower()
                 conclusion = (cr.get("conclusion") or "").lower()
                 name = cr.get("name", "Unknown Check")
                 if conclusion in ("failure", "timed_out", "action_required", "cancelled", "startup_failure"):
                     failed.append(name)
+                elif status in ("queued", "in_progress", "waiting", "requested", "pending") or (status != "completed" and not conclusion):
+                    ongoing.append(name)
+                elif conclusion in ("success", "neutral", "skipped"):
+                    passed.append(name)
+
+            # If no check runs found, check the commit status API
+            if not check_runs:
+                try:
+                    status_res = self._request("GET", f"/repos/{owner}/{repo}/commits/{commit_sha}/status")
+                    statuses = status_res.get("statuses", []) if isinstance(status_res, dict) else []
+                    for st in statuses:
+                        state = (st.get("state") or "").lower()
+                        context = st.get("context", "Unknown Status")
+                        if state in ("failure", "error"):
+                            failed.append(context)
+                        elif state == "pending":
+                            ongoing.append(context)
+                        elif state == "success":
+                            passed.append(context)
+                except Exception as e:
+                    logger.debug("Could not fetch commit status for %s/%s@%s: %s", owner, repo, commit_sha[:8], e)
+
+            if failed:
+                checks_status = "FAILED"
+            elif ongoing:
+                checks_status = "ONGOING"
+            elif passed:
+                checks_status = "PASSED"
+            else:
+                checks_status = None
+
             return {
                 "has_check_error": len(failed) > 0,
-                "failed_checks": failed
+                "failed_checks": failed,
+                "checks_status": checks_status
             }
         except Exception as e:
             logger.debug("Could not fetch check-runs for %s/%s@%s: %s", owner, repo, commit_sha[:8], e)
-            return {"has_check_error": False, "failed_checks": []}
+            return {"has_check_error": False, "failed_checks": [], "checks_status": None}
 
     def get_pr_mergeable_status(self, owner: str, repo: str, pr_number: int) -> Dict[str, Any]:
         """
@@ -491,8 +527,8 @@ class GitHubClient:
         except Exception as e:
             logger.debug("Could not fetch issue comments for PR #%s: %s", pr_number, e)
 
-        # Check CI check runs for errors
-        check_summary = self.get_check_runs_summary(owner, repo, commit_sha) if commit_sha else {"has_check_error": False, "failed_checks": []}
+        # Check CI check runs for errors and status
+        check_summary = self.get_check_runs_summary(owner, repo, commit_sha) if commit_sha else {"has_check_error": False, "failed_checks": [], "checks_status": None}
 
         # Check merge conflict status
         conflict_summary = self.get_pr_mergeable_status(owner, repo, pr_number)
@@ -507,6 +543,7 @@ class GitHubClient:
             "has_user_manually_approved": user_manually_approved,
             "has_check_error": check_summary.get("has_check_error", False),
             "failed_checks": check_summary.get("failed_checks", []),
+            "checks_status": check_summary.get("checks_status", None),
             "has_conflict": conflict_summary.get("has_conflict", False),
             "mergeable_state": conflict_summary.get("mergeable_state", "unknown"),
             "has_user_reviewed": has_user_reviewed,

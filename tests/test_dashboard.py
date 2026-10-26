@@ -617,6 +617,116 @@ class TestDashboardBackend(unittest.TestCase):
         repo_service.refresh_pr_cache()
         self.assertEqual(self.gh_client.get_pr_review_summary.call_count, 2)
 
+    def test_delta_caching_refreshes_when_checks_ongoing(self):
+        """Verify that when checks are ONGOING, delta caching does not suppress refresh so check completion can be detected."""
+        repo_service = self.backend.repository_service
+        self.gh_client.get_pr_review_summary.reset_mock()
+        self.gh_client.get_pr_review_summary.return_value = {
+            "has_other_changes_requested": False,
+            "other_changes_requested_by": [],
+            "other_approved_by": [],
+            "has_user_reviewed": False,
+            "user_review_state": None,
+            "checks_status": "ONGOING",
+            "has_check_error": False,
+            "failed_checks": []
+        }
+
+        # First refresh: caches PR with ONGOING checks
+        repo_service.refresh_pr_cache()
+        self.assertEqual(self.gh_client.get_pr_review_summary.call_count, 1)
+
+        # Second refresh with same SHA and updated_at: should re-fetch because checks were ONGOING
+        repo_service.refresh_pr_cache()
+        self.assertEqual(self.gh_client.get_pr_review_summary.call_count, 2)
+
+    def test_checks_status_in_annotated_status(self):
+        """Verify checks_status is populated and returned in get_annotated_status."""
+        self.gh_client.get_pr_review_summary.return_value = {
+            "has_other_changes_requested": False,
+            "other_changes_requested_by": [],
+            "other_approved_by": [],
+            "has_user_reviewed": False,
+            "user_review_state": None,
+            "checks_status": "PASSED",
+            "has_check_error": False,
+            "failed_checks": []
+        }
+        self.backend.repository_service.refresh_pr_cache()
+        status = self.backend.get_annotated_status()
+        pr = status["pull_requests"][0]
+        self.assertEqual(pr.get("checks_status"), "PASSED")
+
+    def test_github_client_check_runs_summary_states(self):
+        """Test GitHubClient.get_check_runs_summary for PASSED, ONGOING, and FAILED states."""
+        client = GitHubClient(token="dummy-token")
+        
+        # 1. Failed check runs
+        client._request = MagicMock(return_value={
+            "check_runs": [
+                {"name": "build", "status": "completed", "conclusion": "failure"},
+                {"name": "lint", "status": "completed", "conclusion": "success"}
+            ]
+        })
+        res_failed = client.get_check_runs_summary("owner", "repo", "sha123")
+        self.assertEqual(res_failed["checks_status"], "FAILED")
+        self.assertTrue(res_failed["has_check_error"])
+        self.assertIn("build", res_failed["failed_checks"])
+
+        # 2. Ongoing check runs
+        client._request = MagicMock(return_value={
+            "check_runs": [
+                {"name": "test", "status": "in_progress", "conclusion": None},
+                {"name": "lint", "status": "completed", "conclusion": "success"}
+            ]
+        })
+        res_ongoing = client.get_check_runs_summary("owner", "repo", "sha123")
+        self.assertEqual(res_ongoing["checks_status"], "ONGOING")
+        self.assertFalse(res_ongoing["has_check_error"])
+
+        # 3. Passed check runs
+        client._request = MagicMock(return_value={
+            "check_runs": [
+                {"name": "test", "status": "completed", "conclusion": "success"},
+                {"name": "lint", "status": "completed", "conclusion": "success"}
+            ]
+        })
+        res_passed = client.get_check_runs_summary("owner", "repo", "sha123")
+        self.assertEqual(res_passed["checks_status"], "PASSED")
+        self.assertFalse(res_passed["has_check_error"])
+
+        # 4. Fallback to commit status API when no check runs
+        def fake_request(method, endpoint):
+            if "check-runs" in endpoint:
+                return {"check_runs": []}
+            if "status" in endpoint:
+                return {"statuses": [{"context": "ci/circleci", "state": "success"}]}
+            return {}
+
+        client._request = MagicMock(side_effect=fake_request)
+        res_status_passed = client.get_check_runs_summary("owner", "repo", "sha123")
+        self.assertEqual(res_status_passed["checks_status"], "PASSED")
+
+        # 5. No checks at all
+        client._request = MagicMock(return_value={})
+        res_none = client.get_check_runs_summary("owner", "repo", "sha123")
+        self.assertIsNone(res_none["checks_status"])
+        self.assertFalse(res_none["has_check_error"])
+
+    def test_dashboard_and_pr_details_contain_checks_status_pills(self):
+        """Verify dashboard.html and pr_details.html contain Checks Passed, Checks Ongoing, Checks Failed pill logic."""
+        with open("dashboard.html", "r", encoding="utf-8") as f:
+            dash_html = f.read()
+        self.assertIn("Checks Passed", dash_html)
+        self.assertIn("Checks Ongoing", dash_html)
+        self.assertIn("Checks Failed", dash_html)
+
+        with open("pr_details.html", "r", encoding="utf-8") as f:
+            details_html = f.read()
+        self.assertIn("Checks Passed", details_html)
+        self.assertIn("Checks Ongoing", details_html)
+        self.assertIn("Checks Failed", details_html)
+
 if __name__ == "__main__":
     unittest.main()
 

@@ -476,7 +476,10 @@ class DashboardBackend:
                 "html_url": pr_status.get("html_url", ""),
                 "status_badge": pr_status.get("status", "UNKNOWN"),
                 "status_label": pr_status.get("status", "Unknown"),
-                "report_file": pr_status.get("report_file", "")
+                "report_file": pr_status.get("report_file", ""),
+                "checks_status": pr_status.get("checks_status", None),
+                "has_check_error": pr_status.get("has_check_error", False),
+                "failed_checks": pr_status.get("failed_checks", [])
             }
 
         return {

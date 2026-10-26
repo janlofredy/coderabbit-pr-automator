@@ -809,9 +809,15 @@
                 });
             }
 
-            // 7. Check Error
-            if (pr.has_check_error) {
-                pills.push(`<span class="badge badge-red">⚠️ Check Error</span>`);
+            // 7. Checks Status ("Checks Passed", "Checks Ongoing", "Checks Failed")
+            const checksStatus = (pr.checks_status || '').toUpperCase();
+            if (checksStatus === 'FAILED' || checksStatus === 'CHECKS FAILED' || pr.has_check_error) {
+                const failList = (pr.failed_checks || []).join(', ');
+                pills.push(`<span class="badge badge-red"${failList ? ` title="${escapeHtml(failList)}"` : ' title="Checks Failed"'}>❌ Checks Failed</span>`);
+            } else if (checksStatus === 'ONGOING' || checksStatus === 'CHECKS ONGOING' || checksStatus === 'PENDING') {
+                pills.push(`<span class="badge badge-yellow" title="Checks Ongoing">⏳ Checks Ongoing</span>`);
+            } else if (checksStatus === 'PASSED' || checksStatus === 'CHECKS PASSED' || checksStatus === 'SUCCESS') {
+                pills.push(`<span class="badge badge-green" title="Checks Passed">✅ Checks Passed</span>`);
             }
 
             // 8. Merge Conflict

@@ -89,7 +89,8 @@ class RepositoryManagementService:
 
         # Check if we can reuse previous review summary (Delta Caching)
         # If head_sha and updated_at match an existing cached PR entry, no new commits or events occurred
-        if cached_entry and cached_entry.get("head_sha") == head_sha and cached_entry.get("updated_at") == updated_at:
+        # (If checks were previously ONGOING, refresh to detect when checks finish)
+        if cached_entry and cached_entry.get("head_sha") == head_sha and cached_entry.get("updated_at") == updated_at and cached_entry.get("checks_status") != "ONGOING":
             review_summary = {
                 "has_other_changes_requested": cached_entry.get("has_other_changes_requested", False),
                 "other_changes_requested_by": cached_entry.get("other_changes_requested_by", []),
@@ -100,6 +101,7 @@ class RepositoryManagementService:
                 "has_user_manually_approved": cached_entry.get("has_user_manually_approved", False),
                 "has_check_error": cached_entry.get("has_check_error", False),
                 "failed_checks": cached_entry.get("failed_checks", []),
+                "checks_status": cached_entry.get("checks_status", None),
                 "has_conflict": cached_entry.get("has_conflict", False),
                 "mergeable_state": cached_entry.get("mergeable_state", "unknown"),
                 "has_user_reviewed": cached_entry.get("has_user_reviewed", False),
@@ -133,6 +135,7 @@ class RepositoryManagementService:
             "has_user_manually_approved": review_summary.get("has_user_manually_approved", False),
             "has_check_error": review_summary.get("has_check_error", False),
             "failed_checks": review_summary.get("failed_checks", []),
+            "checks_status": review_summary.get("checks_status", None),
             "has_conflict": review_summary.get("has_conflict", False),
             "mergeable_state": review_summary.get("mergeable_state", "unknown"),
             "has_user_reviewed": review_summary.get("has_user_reviewed", False),
