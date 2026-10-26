@@ -799,6 +799,28 @@ class TestDashboardBackend(unittest.TestCase):
         pr = self.backend.get_annotated_status()["pull_requests"][0]
         self.assertFalse(pr["ready_to_merge"])
 
+        # Case 6: Bot auto approved AND manually approved from same account -> 1 approval (user account is the bot)
+        self.backend.repository_service._cached_prs = []
+        self.gh_client.get_pr_review_summary.return_value = {
+            "has_other_changes_requested": False,
+            "other_changes_requested_by": [],
+            "other_approved_by": [],
+            "other_commented_by": [],
+            "has_other_commented": False,
+            "has_user_auto_approved": True,
+            "has_user_manually_approved": True,
+            "has_check_error": False,
+            "failed_checks": [],
+            "checks_status": "PASSED",
+            "has_conflict": False,
+            "has_user_reviewed": True,
+            "user_review_state": "APPROVED"
+        }
+        self.backend.refresh_pr_cache()
+        pr = self.backend.get_annotated_status()["pull_requests"][0]
+        self.assertEqual(pr["total_approvals"], 1)
+        self.assertFalse(pr["ready_to_merge"])
+
     def test_author_text_approval_detection(self):
         """Verify author in-text approval (LGTM, approved, etc.) counts as approval."""
         client = GitHubClient(token="fake")

@@ -1624,12 +1624,9 @@
             if (pr.bot_review_outcome === 'CHANGES_REQUESTED' || pr.status_badge === 'OTHER_CHANGES_REQUESTED') {
                 return { class: 'badge-red', text: '❌ Bot Changes Requested' };
             }
-            // Priority 5: Approved
-            if (pr.has_user_auto_approved || pr.status_badge === 'APPROVED' || (pr.bot_review_outcome && pr.bot_review_outcome.startsWith('APPROVED'))) {
+            // Priority 5: Approved (User account is the bot)
+            if (pr.has_user_auto_approved || pr.status_badge === 'APPROVED' || (pr.bot_review_outcome && pr.bot_review_outcome.startsWith('APPROVED')) || pr.has_user_manually_approved || pr.status_badge === 'MANUALLY_APPROVED') {
                 return { class: 'badge-green', text: '🤖 Bot Approved' };
-            }
-            if (pr.has_user_manually_approved || pr.status_badge === 'MANUALLY_APPROVED') {
-                return { class: 'badge-green', text: '👤 Manually Approved' };
             }
             // Priority 5b: Comments Posted / Already Reviewed
             if (pr.status_badge === 'COMMENTS_POSTED' || pr.bot_review_outcome === 'COMMENTED' || pr.bot_review_outcome === 'NEEDS_WORK (Minor Issues Detected)') {
@@ -1695,12 +1692,7 @@
                     pills.push(`<span class="badge badge-purple">👤 Your PR (Author)</span>`);
                 }
 
-                // 3. Manually Approved by you
-                if (pr.has_user_manually_approved || pr.status_badge === 'MANUALLY_APPROVED') {
-                    pills.push(`<span class="badge badge-blue">👤 Manually Approved by you</span>`);
-                }
-
-                // 4. Approved by other reviewers
+                // 3. Approved by other reviewers
                 if ((pr.other_approved_by || []).length > 0) {
                     (pr.other_approved_by || []).forEach(name => {
                         pills.push(`<span class="badge badge-green">👍 Approved by ${escapeHtml(name)}</span>`);

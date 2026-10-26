@@ -390,15 +390,16 @@ class DashboardBackend:
             item["report_file"] = status_entry.get("report_file", "")
 
             # Calculate distinct approvals
+            # User account IS the bot - no need to separate them into two distinct approvals
+            user_key = (auth_user or "bot").strip().lower()
             distinct_approvers = set()
             for name in (item.get("other_approved_by") or []):
-                if name:
-                    distinct_approvers.add(name.strip().lower())
+                cleaned = name.strip().lower()
+                if cleaned and cleaned != user_key:
+                    distinct_approvers.add(cleaned)
 
-            if is_auto_approved or item.get("has_user_auto_approved"):
-                distinct_approvers.add("__bot_auto_approval__")
-            if is_manual_approved or item.get("has_user_manually_approved"):
-                distinct_approvers.add("__user_manual_approval__")
+            if is_auto_approved or item.get("has_user_auto_approved") or is_manual_approved or item.get("has_user_manually_approved"):
+                distinct_approvers.add(user_key)
 
             total_approvals = len(distinct_approvers)
             item["total_approvals"] = total_approvals
