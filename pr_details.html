@@ -772,7 +772,7 @@
             }
 
             // Status badges
-            renderStatusPills(pr, status);
+            renderStatusPills(pr, status, logs);
 
             // History list in sidebar
             renderRunHistory(logs);
@@ -781,31 +781,37 @@
             renderSelectedRun();
         }
 
-        function getBotReviewStatus(pr, status) {
+        function getBotReviewStatus(pr, status, logs = []) {
+            const latestLog = (logs && logs.length > 0) ? logs[0] : null;
+            const latestOutcome = (latestLog && (latestLog.review_outcome || latestLog.status)) || '';
+
             // Priority 1: Ongoing Review
-            if (pr.status_badge === 'REVIEW_IN_PROGRESS' || pr.status_badge === 'RATE_LIMITED') {
+            if (pr.status_badge === 'REVIEW_IN_PROGRESS' || pr.status_badge === 'RATE_LIMITED' || status.status === 'REVIEWING') {
                 return { class: 'badge-blue', text: '⚡ Bot Ongoing Review' };
             }
-            // Priority 2: Changes Requested
-            if (status.review_outcome === 'CHANGES_REQUESTED' || (status.review_outcome && status.review_outcome.includes('CHANGES_REQUESTED')) || pr.bot_review_outcome === 'CHANGES_REQUESTED' || pr.status_badge === 'OTHER_CHANGES_REQUESTED') {
-                return { class: 'badge-red', text: '❌ Bot Changes Requested' };
-            }
-            // Priority 3: Approved (User account is the bot)
-            if (pr.has_user_auto_approved || pr.status_badge === 'APPROVED' || (pr.bot_review_outcome && pr.bot_review_outcome.startsWith('APPROVED')) || (status.review_outcome && status.review_outcome.startsWith('APPROVED')) || pr.has_user_manually_approved || pr.status_badge === 'MANUALLY_APPROVED') {
+            // Priority 2: Approved (User account is the bot) - Checked before Changes Requested
+            if (latestOutcome.startsWith('APPROVED') || pr.has_user_auto_approved || pr.status_badge === 'APPROVED' || (pr.bot_review_outcome && pr.bot_review_outcome.startsWith('APPROVED')) || (status.review_outcome && status.review_outcome.startsWith('APPROVED')) || pr.has_user_manually_approved || pr.status_badge === 'MANUALLY_APPROVED') {
                 return { class: 'badge-green', text: '🤖 Bot Approved' };
             }
+            // Priority 3: Bot Changes Requested (Only if the bot itself requested changes, never from other reviewers)
+            if (latestOutcome === 'CHANGES_REQUESTED' || pr.bot_review_outcome === 'CHANGES_REQUESTED' || status.review_outcome === 'CHANGES_REQUESTED') {
+                return { class: 'badge-red', text: '❌ Bot Changes Requested' };
+            }
             // Priority 4: Failed / Skipped
-            if (pr.status_badge === 'REVIEW_FAILED') {
+            if (pr.status_badge === 'REVIEW_FAILED' || latestOutcome === 'ERROR' || status.status === 'ERROR') {
                 return { class: 'badge-red', text: '❌ Review Failed' };
             }
             if (pr.status_badge === 'SKIPPED_MAX_FILES') {
                 return { class: 'badge-red', text: `🛑 ${pr.status_label || 'Skipped (>100 Files)'}` };
             }
+            if (latestOutcome === 'COMMENTED' || latestOutcome.includes('NEEDS_WORK') || pr.status_badge === 'COMMENTS_POSTED') {
+                return { class: 'badge-blue', text: '💬 Comments Posted' };
+            }
             // Priority 5: Default Pending Review
             return { class: 'badge-gray', text: '⏳ Bot Pending Review' };
         }
 
-        function renderStatusPills(pr, status) {
+        function renderStatusPills(pr, status, logs = []) {
             const rtmContainer = document.getElementById('ready-to-merge-container');
             if (rtmContainer) {
                 if (pr.ready_to_merge) {
@@ -825,7 +831,7 @@
             const pills = [];
 
             // 1. Bot Review Status always first (only 1)
-            const botStatus = getBotReviewStatus(pr, status);
+            const botStatus = getBotReviewStatus(pr, status, logs);
             pills.push(`<span class="badge ${botStatus.class}">${escapeHtml(botStatus.text)}</span>`);
 
             // 2. Author / Ownership

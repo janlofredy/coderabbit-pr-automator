@@ -887,6 +887,46 @@ class TestDashboardBackend(unittest.TestCase):
         self.assertIn("ready-to-merge-container", details_html)
         self.assertIn("READY TO MERGE", details_html)
 
+    def test_bot_approved_when_latest_history_approved_even_with_other_changes_requested(self):
+        """Verify that when the latest review run approved, bot_review_outcome is APPROVED even if other reviewers requested changes."""
+        pr_key = "owner/repo1#101"
+        self.state_mgr.record_pr_log(pr_key, {
+            "status": "COMPLETED",
+            "review_outcome": "APPROVED",
+            "head_sha": "abcdef1234567890"
+        })
+        self.gh_client.get_pr_review_summary.return_value = {
+            "has_other_changes_requested": True,
+            "other_changes_requested_by": ["lead-dev"],
+            "other_approved_by": [],
+            "other_commented_by": [],
+            "has_other_commented": False,
+            "has_user_auto_approved": True,
+            "has_user_manually_approved": False,
+            "has_check_error": False,
+            "failed_checks": [],
+            "checks_status": "PASSED",
+            "has_conflict": False,
+            "has_user_reviewed": True,
+            "user_review_state": "APPROVED"
+        }
+        self.backend.repository_service._cached_prs = []
+        self.backend.refresh_pr_cache()
+        status = self.backend.get_annotated_status()
+        pr = status["pull_requests"][0]
+
+        # Bot review outcome must be APPROVED
+        self.assertEqual(pr["bot_review_outcome"], "APPROVED")
+
+        # HTML must not map OTHER_CHANGES_REQUESTED to Bot Changes Requested
+        with open("dashboard.html", "r", encoding="utf-8") as f:
+            dash_html = f.read()
+        self.assertNotIn("pr.status_badge === 'OTHER_CHANGES_REQUESTED'", dash_html)
+
+        with open("pr_details.html", "r", encoding="utf-8") as f:
+            details_html = f.read()
+        self.assertNotIn("pr.status_badge === 'OTHER_CHANGES_REQUESTED'", details_html)
+
 if __name__ == "__main__":
     unittest.main()
 

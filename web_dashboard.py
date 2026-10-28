@@ -277,6 +277,7 @@ class DashboardBackend:
         is_rate_limited, remaining, reason = self.state_manager.is_rate_limit_active()
         active_reviews = state.get("active_reviews", {})
         pr_statuses = state.get("pr_statuses", {})
+        pr_logs = state.get("pr_logs", {})
         auth_user = self.github_client.get_username()
 
         annotated_prs = []
@@ -288,6 +289,9 @@ class DashboardBackend:
             item = dict(pr)
             key = item["pr_key"]
             status_entry = pr_statuses.get(key, {})
+            logs_for_pr = pr_logs.get(key, [])
+            latest_log = logs_for_pr[0] if (logs_for_pr and isinstance(logs_for_pr, list)) else {}
+            latest_log_outcome = (latest_log.get("review_outcome") or latest_log.get("status") or "").strip()
 
             has_other_changes = item.get("has_other_changes_requested", False)
             other_changers = item.get("other_changes_requested_by", [])
@@ -298,6 +302,7 @@ class DashboardBackend:
 
             is_auto_approved = (
                 item.get("has_user_auto_approved", False)
+                or latest_log_outcome.startswith("APPROVED")
                 or (status_entry.get("review_outcome") or "").startswith("APPROVED")
                 or (status_entry.get("review_state") == "APPROVED" and "CodeRabbit" in str(status_entry.get("review_body", "")))
                 or ((gh_review_state or "").startswith("APPROVED") and item.get("has_user_auto_approved", False))
@@ -381,13 +386,13 @@ class DashboardBackend:
                 item["status_description"] = "Waiting for the next review scan to check eligibility and start an automated review."
 
             # Track bot review outcome
-            bot_outcome = status_entry.get("review_outcome") or status_entry.get("review_state")
+            bot_outcome = latest_log_outcome or status_entry.get("review_outcome") or status_entry.get("review_state")
             if is_auto_approved:
                 bot_outcome = "APPROVED"
             elif not bot_outcome and item.get("has_user_auto_approved"):
                 bot_outcome = "APPROVED"
             item["bot_review_outcome"] = bot_outcome
-            item["report_file"] = status_entry.get("report_file", "")
+            item["report_file"] = status_entry.get("report_file", "") or latest_log.get("report_file", "")
 
             # Calculate distinct approvals
             # User account IS the bot - no need to separate them into two distinct approvals
