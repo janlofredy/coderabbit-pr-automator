@@ -1693,16 +1693,25 @@
                 }
 
                 // 3. Approved by other reviewers
+                const outdatedApprovals = new Set((pr.outdated_approvals_by || []).map(u => (u || '').toLowerCase()));
                 if ((pr.other_approved_by || []).length > 0) {
                     (pr.other_approved_by || []).forEach(name => {
-                        pills.push(`<span class="badge badge-green">👍 Approved by ${escapeHtml(name)}</span>`);
+                        const isOutdated = outdatedApprovals.has((name || '').toLowerCase());
+                        const text = isOutdated ? `👍 Approved by ${escapeHtml(name)} (⏳ Outdated)` : `👍 Approved by ${escapeHtml(name)}`;
+                        const cls = isOutdated ? 'badge-gray' : 'badge-green';
+                        const title = isOutdated ? 'Review was submitted on an earlier commit' : 'Approved latest commit';
+                        pills.push(`<span class="badge ${cls}" title="${title}">${text}</span>`);
                     });
                 }
 
-                // 5. Changes requested by others
+                // 4. Changes requested by others
+                const outdatedChanges = new Set((pr.outdated_changes_requested_by || []).map(u => (u || '').toLowerCase()));
                 if (pr.has_other_changes_requested && (pr.other_changes_requested_by || []).length > 0) {
                     (pr.other_changes_requested_by || []).forEach(name => {
-                        pills.push(`<span class="badge badge-red">❌ Changes Requested by ${escapeHtml(name)}</span>`);
+                        const isOutdated = outdatedChanges.has((name || '').toLowerCase());
+                        const text = isOutdated ? `❌ Changes Requested by ${escapeHtml(name)} (⏳ Outdated)` : `❌ Changes Requested by ${escapeHtml(name)}`;
+                        const title = isOutdated ? 'Requested changes on an earlier commit' : 'Changes requested';
+                        pills.push(`<span class="badge badge-red" title="${title}">${text}</span>`);
                     });
                 }
 

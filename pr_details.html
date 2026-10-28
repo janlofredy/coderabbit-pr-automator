@@ -840,16 +840,25 @@
             }
 
             // 3. Approved by other reviewers
+            const outdatedApprovals = new Set((pr.outdated_approvals_by || []).map(u => (u || '').toLowerCase()));
             if ((pr.other_approved_by || []).length > 0) {
                 (pr.other_approved_by || []).forEach(name => {
-                    pills.push(`<span class="badge badge-green">👍 Approved by ${escapeHtml(name)}</span>`);
+                    const isOutdated = outdatedApprovals.has((name || '').toLowerCase());
+                    const text = isOutdated ? `👍 Approved by ${escapeHtml(name)} (⏳ Outdated)` : `👍 Approved by ${escapeHtml(name)}`;
+                    const cls = isOutdated ? 'badge-gray' : 'badge-green';
+                    const title = isOutdated ? 'Review was submitted on an earlier commit' : 'Approved latest commit';
+                    pills.push(`<span class="badge ${cls}" title="${title}">${text}</span>`);
                 });
             }
 
-            // 5. Changes Requested by others
+            // 4. Changes Requested by others
+            const outdatedChanges = new Set((pr.outdated_changes_requested_by || []).map(u => (u || '').toLowerCase()));
             if (pr.has_other_changes_requested && (pr.other_changes_requested_by || []).length > 0) {
                 (pr.other_changes_requested_by || []).forEach(name => {
-                    pills.push(`<span class="badge badge-red">❌ Changes Requested by ${escapeHtml(name)}</span>`);
+                    const isOutdated = outdatedChanges.has((name || '').toLowerCase());
+                    const text = isOutdated ? `❌ Changes Requested by ${escapeHtml(name)} (⏳ Outdated)` : `❌ Changes Requested by ${escapeHtml(name)}`;
+                    const title = isOutdated ? 'Requested changes on an earlier commit' : 'Changes requested';
+                    pills.push(`<span class="badge badge-red" title="${title}">${text}</span>`);
                 });
             }
 
@@ -891,6 +900,8 @@
                 return;
             }
 
+            const currentHeadSha = (currentPrData && currentPrData.pr && currentPrData.pr.head_sha) || '';
+
             list.innerHTML = logs.map((log, index) => {
                 const date = log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : 'Recent';
                 const outcome = log.review_outcome || log.status || 'UNKNOWN';
@@ -899,12 +910,17 @@
                 const badgeClass = isErr ? 'badge-red' : (isRateLimited ? 'badge-orange' : (outcome.includes('APPROVED') ? 'badge-green' : 'badge-yellow'));
                 const activeClass = index === selectedRunIndex ? 'active' : '';
 
+                const logSha = log.head_sha || '';
+                const isShaMatched = Boolean(currentHeadSha && logSha && (currentHeadSha.startsWith(logSha.substring(0, 7)) || logSha.startsWith(currentHeadSha.substring(0, 7))));
+                const isOutdated = Boolean(index > 0 || (currentHeadSha && !isShaMatched));
+
                 const accBadge = log.coderabbit_account ? `<span>👤 <strong>${escapeHtml(log.coderabbit_account)}</strong></span>` : '';
 
                 return `
                     <div class="run-item ${activeClass}" onclick="selectRun(${index})">
                         <div class="run-item-top">
                             <span class="badge ${badgeClass}" style="font-size: 0.7rem; padding: 0.15rem 0.45rem;">${escapeHtml(outcome)}</span>
+                            ${isOutdated ? `<span class="badge badge-gray" style="font-size: 0.65rem; padding: 0.1rem 0.35rem;" title="Run evaluated an earlier commit">⏳ Outdated</span>` : ''}
                             <span class="run-time">${escapeHtml(date)}</span>
                         </div>
                         <div class="run-item-details">

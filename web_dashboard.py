@@ -394,13 +394,14 @@ class DashboardBackend:
             item["bot_review_outcome"] = bot_outcome
             item["report_file"] = status_entry.get("report_file", "") or latest_log.get("report_file", "")
 
-            # Calculate distinct approvals
+            # Calculate distinct approvals (excluding outdated approvals from threshold)
             # User account IS the bot - no need to separate them into two distinct approvals
             user_key = (auth_user or "bot").strip().lower()
+            outdated_approvers = {u.strip().lower() for u in (item.get("outdated_approvals_by") or [])}
             distinct_approvers = set()
             for name in (item.get("other_approved_by") or []):
                 cleaned = name.strip().lower()
-                if cleaned and cleaned != user_key:
+                if cleaned and cleaned != user_key and cleaned not in outdated_approvers:
                     distinct_approvers.add(cleaned)
 
             if is_auto_approved or item.get("has_user_auto_approved") or is_manual_approved or item.get("has_user_manually_approved"):
@@ -523,6 +524,8 @@ class DashboardBackend:
                 "checks_status": pr_status.get("checks_status", None),
                 "has_check_error": pr_status.get("has_check_error", False),
                 "failed_checks": pr_status.get("failed_checks", []),
+                "outdated_approvals_by": [],
+                "outdated_changes_requested_by": [],
                 "ready_to_merge": False,
                 "total_approvals": 0
             }

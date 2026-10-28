@@ -452,6 +452,8 @@ class GitHubClient:
 
         other_changes_requested = []
         other_approved = []
+        outdated_approvals = []
+        outdated_changes_requested = []
         other_commented = set()
         user_auto_approved = False
         user_manually_approved = False
@@ -482,6 +484,8 @@ class GitHubClient:
                         author_text_approved = True
                         if reviewer_login not in other_approved:
                             other_approved.append(reviewer_login)
+                        if not commit_matched and reviewer_login not in outdated_approvals:
+                            outdated_approvals.append(reviewer_login)
 
                 if user and rev_lower == user:
                     if state == "APPROVED":
@@ -513,9 +517,13 @@ class GitHubClient:
                 else:
                     if state == "CHANGES_REQUESTED":
                         other_changes_requested.append(reviewer_login)
+                        if not commit_matched and reviewer_login not in outdated_changes_requested:
+                            outdated_changes_requested.append(reviewer_login)
                     elif state == "APPROVED":
                         if reviewer_login not in other_approved:
                             other_approved.append(reviewer_login)
+                        if not commit_matched and reviewer_login not in outdated_approvals:
+                            outdated_approvals.append(reviewer_login)
                     elif state == "COMMENTED":
                         if not is_cr_auto and "coderabbit" not in rev_lower:
                             other_commented.add(reviewer_login)
@@ -568,6 +576,8 @@ class GitHubClient:
             "has_other_changes_requested": len(other_changes_requested) > 0,
             "other_changes_requested_by": other_changes_requested,
             "other_approved_by": other_approved,
+            "outdated_approvals_by": outdated_approvals,
+            "outdated_changes_requested_by": outdated_changes_requested,
             "other_commented_by": sorted(list(other_commented)),
             "has_other_commented": len(other_commented) > 0,
             "has_user_auto_approved": user_auto_approved,

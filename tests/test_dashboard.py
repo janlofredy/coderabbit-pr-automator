@@ -927,6 +927,80 @@ class TestDashboardBackend(unittest.TestCase):
             details_html = f.read()
         self.assertNotIn("pr.status_badge === 'OTHER_CHANGES_REQUESTED'", details_html)
 
+    def test_outdated_review_tracking(self):
+        """Verify reviews on older commit SHAs are identified in outdated_approvals_by and outdated_changes_requested_by."""
+        client = GitHubClient(token="fake")
+
+        # Mock reviews: reviewer1 approved old commit sha_old, reviewer2 approved sha_current, reviewer3 requested changes on sha_old
+        client.get_reviews_for_pr = MagicMock(return_value=[
+            {"user": {"login": "reviewer1"}, "state": "APPROVED", "commit_id": "sha_old_111", "body": "looks fine"},
+            {"user": {"login": "reviewer2"}, "state": "APPROVED", "commit_id": "sha_current_222", "body": "great"},
+            {"user": {"login": "reviewer3"}, "state": "CHANGES_REQUESTED", "commit_id": "sha_old_111", "body": "needs fix"}
+        ])
+        client.get_comments_for_pr = MagicMock(return_value=[])
+        client.get_check_runs_summary = MagicMock(return_value={"has_check_error": False, "failed_checks": [], "checks_status": "PASSED"})
+        client.get_pr_mergeable_status = MagicMock(return_value={"has_conflict": False, "mergeable_state": "clean"})
+
+        summary = client.get_pr_review_summary(
+            owner="owner",
+            repo="repo",
+            pr_number=1,
+            commit_sha="sha_current_222",
+            auth_user="bot_account"
+        )
+        self.assertIn("reviewer1", summary["other_approved_by"])
+        self.assertIn("reviewer2", summary["other_approved_by"])
+        self.assertIn("reviewer1", summary["outdated_approvals_by"])
+        self.assertNotIn("reviewer2", summary["outdated_approvals_by"])
+        self.assertIn("reviewer3", summary["outdated_changes_requested_by"])
+
+    def test_outdated_approvals_do_not_count_towards_ready_to_merge(self):
+        """Verify that an outdated approval does NOT count towards the 2+ approvals threshold for READY TO MERGE."""
+        # Bot auto approved + reviewer1 approved on current SHA -> 2 approvals -> READY TO MERGE
+        self.gh_client.get_pr_review_summary.return_value = {
+            "has_other_changes_requested": False,
+            "other_changes_requested_by": [],
+            "other_approved_by": ["reviewer1"],
+            "outdated_approvals_by": [],
+            "outdated_changes_requested_by": [],
+            "other_commented_by": [],
+            "has_other_commented": False,
+            "has_user_auto_approved": True,
+            "has_user_manually_approved": False,
+            "has_check_error": False,
+            "failed_checks": [],
+            "checks_status": "PASSED",
+            "has_conflict": False,
+            "has_user_reviewed": True,
+            "user_review_state": "APPROVED"
+        }
+        self.backend.repository_service._cached_prs = []
+        self.backend.refresh_pr_cache()
+        pr = self.backend.get_annotated_status()["pull_requests"][0]
+        self.assertEqual(pr["total_approvals"], 2)
+        self.assertTrue(pr["ready_to_merge"])
+
+        # Now mark reviewer1's approval as outdated -> only 1 approval remains -> NOT ready to merge
+        self.gh_client.get_pr_review_summary.return_value["outdated_approvals_by"] = ["reviewer1"]
+        self.backend.repository_service._cached_prs = []
+        self.backend.refresh_pr_cache()
+        pr = self.backend.get_annotated_status()["pull_requests"][0]
+        self.assertEqual(pr["total_approvals"], 1)
+        self.assertFalse(pr["ready_to_merge"])
+
+    def test_html_contains_outdated_emoji_and_labels(self):
+        """Verify dashboard.html and pr_details.html render the (⏳ Outdated) tag for outdated reviews."""
+        with open("dashboard.html", "r", encoding="utf-8") as f:
+            dash_html = f.read()
+        self.assertIn("(⏳ Outdated)", dash_html)
+        self.assertIn("outdated_approvals_by", dash_html)
+
+        with open("pr_details.html", "r", encoding="utf-8") as f:
+            details_html = f.read()
+        self.assertIn("(⏳ Outdated)", details_html)
+        self.assertIn("outdated_approvals_by", details_html)
+        self.assertIn("isOutdated", details_html)
+
 if __name__ == "__main__":
     unittest.main()
 
