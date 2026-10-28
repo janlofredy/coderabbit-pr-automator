@@ -4,7 +4,7 @@ import tempfile
 import unittest
 import json
 from concurrent.futures import ThreadPoolExecutor
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from config_manager import ConfigManager
 from state_manager import StateManager
@@ -63,7 +63,9 @@ class TestDashboardBackend(unittest.TestCase):
             "other_changes_requested_by": [],
             "other_approved_by": [],
             "has_user_reviewed": False,
-            "user_review_state": None
+            "user_review_state": None,
+            "has_conflict": False,
+            "mergeable_state": "clean",
         }
 
         self.backend = DashboardBackend(
@@ -1000,6 +1002,133 @@ class TestDashboardBackend(unittest.TestCase):
         self.assertIn("(⏳ Outdated)", details_html)
         self.assertIn("outdated_approvals_by", details_html)
         self.assertIn("isOutdated", details_html)
+
+    @patch("time.sleep", return_value=None)
+    def test_get_pr_mergeable_status_retries_on_unknown(self, mock_sleep):
+        """GitHub computes mergeability asynchronously; verify client retries when mergeable is None."""
+        client = GitHubClient(token="fake")
+        client.get_pr = MagicMock(side_effect=[
+            {"mergeable": None, "mergeable_state": "unknown"},
+            {"mergeable": False, "mergeable_state": "dirty"}
+        ])
+
+        status = client.get_pr_mergeable_status("owner", "repo", 42, max_retries=2)
+        self.assertTrue(status["has_conflict"])
+        self.assertEqual(status["mergeable_state"], "dirty")
+        self.assertEqual(client.get_pr.call_count, 2)
+        self.assertTrue(mock_sleep.called)
+
+    def test_delta_cache_invalidates_on_unknown_mergeable_state(self):
+        """Verify delta caching re-checks GitHub when mergeable_state was 'unknown'."""
+        repo_service = self.backend.repository_service
+        self.gh_client.list_open_prs.return_value = [{
+            "number": 1,
+            "title": "PR 1",
+            "user": {"login": "dev"},
+            "head": {"sha": "sha_111", "ref": "feature"},
+            "base": {"sha": "base_000", "ref": "main"},
+            "updated_at": "2026-10-28T00:00:00Z"
+        }]
+
+        # First run: returns unknown mergeable state
+        self.gh_client.get_pr_review_summary.return_value = {
+            "has_other_changes_requested": False,
+            "other_changes_requested_by": [],
+            "other_approved_by": [],
+            "outdated_approvals_by": [],
+            "outdated_changes_requested_by": [],
+            "other_commented_by": [],
+            "has_other_commented": False,
+            "has_user_auto_approved": False,
+            "has_user_manually_approved": False,
+            "has_check_error": False,
+            "failed_checks": [],
+            "checks_status": "PASSED",
+            "has_conflict": False,
+            "mergeable_state": "unknown",
+            "has_user_reviewed": False,
+            "user_review_state": None
+        }
+        repo_service._cached_prs = []
+        repo_service.refresh_pr_cache()
+        self.assertEqual(self.gh_client.get_pr_review_summary.call_count, 1)
+
+        # Second run: mergeable_state was unknown, so delta cache MUST NOT reuse stale entry
+        self.gh_client.get_pr_review_summary.return_value["has_conflict"] = True
+        self.gh_client.get_pr_review_summary.return_value["mergeable_state"] = "dirty"
+        repo_service.refresh_pr_cache()
+        self.assertEqual(self.gh_client.get_pr_review_summary.call_count, 2)
+
+        cached = repo_service.get_cached_prs()[0]
+        self.assertTrue(cached["has_conflict"])
+        self.assertEqual(cached["mergeable_state"], "dirty")
+
+    def test_delta_cache_invalidates_on_base_sha_change(self):
+        """Verify delta caching re-checks GitHub when base branch advances (which can cause merge conflicts)."""
+        repo_service = self.backend.repository_service
+        self.gh_client.list_open_prs.return_value = [{
+            "number": 1,
+            "title": "PR 1",
+            "user": {"login": "dev"},
+            "head": {"sha": "sha_111", "ref": "feature"},
+            "base": {"sha": "base_000", "ref": "main"},
+            "updated_at": "2026-10-28T00:00:00Z"
+        }]
+
+        # First run: Clean PR against base_000
+        self.gh_client.get_pr_review_summary.return_value = {
+            "has_other_changes_requested": False,
+            "other_changes_requested_by": [],
+            "other_approved_by": [],
+            "outdated_approvals_by": [],
+            "outdated_changes_requested_by": [],
+            "other_commented_by": [],
+            "has_other_commented": False,
+            "has_user_auto_approved": False,
+            "has_user_manually_approved": False,
+            "has_check_error": False,
+            "failed_checks": [],
+            "checks_status": "PASSED",
+            "has_conflict": False,
+            "mergeable_state": "clean",
+            "has_user_reviewed": False,
+            "user_review_state": None
+        }
+        repo_service._cached_prs = []
+        repo_service.refresh_pr_cache()
+        self.assertEqual(self.gh_client.get_pr_review_summary.call_count, 1)
+
+        # Base branch advances (main merged another commit, base_sha becomes base_111)
+        self.gh_client.list_open_prs.return_value = [{
+            "number": 1,
+            "title": "PR 1",
+            "user": {"login": "dev"},
+            "head": {"sha": "sha_111", "ref": "feature"},
+            "base": {"sha": "base_111", "ref": "main"},
+            "updated_at": "2026-10-28T00:00:00Z"
+        }]
+        self.gh_client.get_pr_review_summary.return_value["has_conflict"] = True
+        self.gh_client.get_pr_review_summary.return_value["mergeable_state"] = "dirty"
+        repo_service.refresh_pr_cache()
+        self.assertEqual(self.gh_client.get_pr_review_summary.call_count, 2)
+
+        cached = repo_service.get_cached_prs()[0]
+        self.assertTrue(cached["has_conflict"])
+        self.assertEqual(cached["mergeable_state"], "dirty")
+
+    def test_html_renders_merge_conflict_pill(self):
+        """Verify dashboard.html and pr_details.html render the ⚠️ Merge Conflict badge."""
+        with open("dashboard.html", "r", encoding="utf-8") as f:
+            dash_html = f.read()
+        self.assertIn("⚠️ Merge Conflict", dash_html)
+        self.assertIn("pr.has_conflict", dash_html)
+        self.assertIn("mergeState === 'dirty'", dash_html)
+
+        with open("pr_details.html", "r", encoding="utf-8") as f:
+            details_html = f.read()
+        self.assertIn("⚠️ Merge Conflict", details_html)
+        self.assertIn("pr.has_conflict", details_html)
+        self.assertIn("mergeState === 'dirty'", details_html)
 
 if __name__ == "__main__":
     unittest.main()

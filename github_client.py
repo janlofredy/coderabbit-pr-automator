@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import time
 import logging
 import urllib.request
 import urllib.error
@@ -336,25 +337,38 @@ class GitHubClient:
             logger.debug("Could not fetch check-runs for %s/%s@%s: %s", owner, repo, commit_sha[:8], e)
             return {"has_check_error": False, "failed_checks": [], "checks_status": None}
 
-    def get_pr_mergeable_status(self, owner: str, repo: str, pr_number: int) -> Dict[str, Any]:
+    def get_pr_mergeable_status(self, owner: str, repo: str, pr_number: int, max_retries: int = 2) -> Dict[str, Any]:
         """
         Retrieves mergeable status for a pull request.
+        GitHub calculates mergeability asynchronously. If 'mergeable' is None or
+        'mergeable_state' is 'unknown', it retries briefly so GitHub's background job can complete.
         Returns: { 'has_conflict': bool, 'mergeable_state': str }
         """
-        try:
-            pr = self.get_pr(owner, repo, pr_number)
-            mergeable = pr.get("mergeable")
-            mergeable_state = (pr.get("mergeable_state") or "").lower()
+        for attempt in range(max_retries + 1):
+            try:
+                pr = self.get_pr(owner, repo, pr_number)
+                mergeable = pr.get("mergeable")
+                mergeable_state = (pr.get("mergeable_state") or "").lower()
 
-            # mergeable is False or mergeable_state is dirty/conflicting
-            has_conflict = (mergeable is False) or (mergeable_state in ("dirty", "conflicting"))
-            return {
-                "has_conflict": has_conflict,
-                "mergeable_state": mergeable_state
-            }
-        except Exception as e:
-            logger.debug("Could not fetch mergeable status for %s/%s PR #%s: %s", owner, repo, pr_number, e)
-            return {"has_conflict": False, "mergeable_state": "unknown"}
+                # If GitHub background calculation is pending, retry briefly
+                if (mergeable is None or mergeable_state == "unknown") and attempt < max_retries:
+                    time.sleep(1.0)
+                    continue
+
+                # mergeable is False or mergeable_state is dirty/conflicting
+                has_conflict = (mergeable is False) or (mergeable_state in ("dirty", "conflicting"))
+                return {
+                    "has_conflict": has_conflict,
+                    "mergeable_state": mergeable_state
+                }
+            except Exception as e:
+                if attempt < max_retries:
+                    time.sleep(0.5)
+                    continue
+                logger.warning("Could not fetch mergeable status for %s/%s PR #%s: %s", owner, repo, pr_number, e)
+                return {"has_conflict": False, "mergeable_state": "unknown"}
+
+        return {"has_conflict": False, "mergeable_state": "unknown"}
 
     def has_user_reviewed_sha(self, owner: str, repo: str, pr_number: int, commit_sha: str, username: Optional[str] = None) -> Tuple[bool, Optional[str]]:
         """

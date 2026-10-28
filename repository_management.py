@@ -85,12 +85,25 @@ class RepositoryManagementService:
         author = (pr.get("user") or {}).get("login", "")
         is_own = bool(auth_user and author.lower() == auth_user.lower())
         head_sha = (pr.get("head") or {}).get("sha", "")
+        base_sha = (pr.get("base") or {}).get("sha", "")
         updated_at = pr.get("updated_at", "")
 
         # Check if we can reuse previous review summary (Delta Caching)
-        # If head_sha and updated_at match an existing cached PR entry, no new commits or events occurred
-        # (If checks were previously ONGOING, refresh to detect when checks finish)
-        if cached_entry and cached_entry.get("head_sha") == head_sha and cached_entry.get("updated_at") == updated_at and cached_entry.get("checks_status") != "ONGOING":
+        # Conditions to invalidate cache:
+        # 1. head_sha changed (new commits pushed to PR)
+        # 2. base_sha changed (target branch advanced, which can introduce merge conflicts)
+        # 3. updated_at changed (new comments, reviews, or events on PR)
+        # 4. checks_status was "ONGOING" (CI checks still running, refresh to detect when checks finish)
+        # 5. mergeable_state was "unknown" or None (GitHub was still computing mergeability, refresh to obtain final status)
+        can_reuse_cache = (
+            cached_entry is not None
+            and cached_entry.get("head_sha") == head_sha
+            and (not base_sha or not cached_entry.get("base_sha") or cached_entry.get("base_sha") == base_sha)
+            and cached_entry.get("updated_at") == updated_at
+            and cached_entry.get("checks_status") != "ONGOING"
+            and cached_entry.get("mergeable_state") not in ("unknown", None, "")
+        )
+        if can_reuse_cache:
             review_summary = {
                 "has_other_changes_requested": cached_entry.get("has_other_changes_requested", False),
                 "other_changes_requested_by": cached_entry.get("other_changes_requested_by", []),
@@ -124,6 +137,7 @@ class RepositoryManagementService:
             "author": author,
             "is_own_pr": is_own,
             "base_ref": (pr.get("base") or {}).get("ref", ""),
+            "base_sha": base_sha,
             "head_ref": (pr.get("head") or {}).get("ref", ""),
             "head_sha": head_sha,
             "html_url": pr.get("html_url", ""),

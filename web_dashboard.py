@@ -524,6 +524,8 @@ class DashboardBackend:
                 "checks_status": pr_status.get("checks_status", None),
                 "has_check_error": pr_status.get("has_check_error", False),
                 "failed_checks": pr_status.get("failed_checks", []),
+                "has_conflict": pr_status.get("has_conflict", False),
+                "mergeable_state": pr_status.get("mergeable_state", "unknown"),
                 "outdated_approvals_by": [],
                 "outdated_changes_requested_by": [],
                 "ready_to_merge": False,

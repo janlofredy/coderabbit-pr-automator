@@ -1734,7 +1734,8 @@
                 }
 
                 // 8. Merge Conflict
-                if (pr.has_conflict) {
+                const mergeState = (pr.mergeable_state || '').toLowerCase();
+                if (pr.has_conflict || mergeState === 'dirty' || mergeState === 'conflicting') {
                     pills.push(`<span class="badge badge-red" title="This pull request has merge conflicts that must be resolved">⚠️ Merge Conflict</span>`);
                 }
 
