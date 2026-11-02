@@ -78,6 +78,7 @@ class RepositoryManagementService:
         pr: Dict[str, Any],
         auth_user: Optional[str] = None,
         cached_entry: Optional[Dict[str, Any]] = None,
+        base_branch_tips: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """Builds a cached PR dictionary, reusing cached review summary if PR has not changed."""
         num = pr.get("number")
@@ -85,25 +86,41 @@ class RepositoryManagementService:
         author = (pr.get("user") or {}).get("login", "")
         is_own = bool(auth_user and author.lower() == auth_user.lower())
         head_sha = (pr.get("head") or {}).get("sha", "")
+        base_ref = (pr.get("base") or {}).get("ref", "")
         base_sha = (pr.get("base") or {}).get("sha", "")
         updated_at = pr.get("updated_at", "")
+
+        # Current tip SHA of the target base branch (e.g. tip of 'main')
+        current_base_tip = (base_branch_tips or {}).get(base_ref, "")
+        cached_base_tip = (cached_entry or {}).get("base_tip_sha", "")
 
         # Check if we can reuse previous review summary (Delta Caching)
         # Conditions to invalidate cache:
         # 1. head_sha changed (new commits pushed to PR)
-        # 2. base_sha changed (target branch advanced, which can introduce merge conflicts)
+        # 2. base_tip_sha changed (target branch advanced, which can introduce merge conflicts)
         # 3. updated_at changed (new comments, reviews, or events on PR)
         # 4. checks_status was "ONGOING" (CI checks still running, refresh to detect when checks finish)
         # 5. mergeable_state was "unknown" or None (GitHub was still computing mergeability, refresh to obtain final status)
+        base_tip_matches = True
+        if current_base_tip and cached_base_tip:
+            base_tip_matches = (current_base_tip == cached_base_tip)
+        elif current_base_tip and not cached_base_tip:
+            # If current base tip is known but cache has no recorded tip, invalidate to establish baseline
+            base_tip_matches = False
+
         can_reuse_cache = (
             cached_entry is not None
             and cached_entry.get("head_sha") == head_sha
+            and base_tip_matches
             and (not base_sha or not cached_entry.get("base_sha") or cached_entry.get("base_sha") == base_sha)
             and cached_entry.get("updated_at") == updated_at
             and cached_entry.get("checks_status") != "ONGOING"
             and cached_entry.get("mergeable_state") not in ("unknown", None, "")
         )
         if can_reuse_cache:
+            m_state = cached_entry.get("mergeable_state")
+            if not m_state:
+                m_state = "clean" if cached_entry.get("has_conflict") is False else "unknown"
             review_summary = {
                 "has_other_changes_requested": cached_entry.get("has_other_changes_requested", False),
                 "other_changes_requested_by": cached_entry.get("other_changes_requested_by", []),
@@ -119,7 +136,7 @@ class RepositoryManagementService:
                 "failed_checks": cached_entry.get("failed_checks", []),
                 "checks_status": cached_entry.get("checks_status", None),
                 "has_conflict": cached_entry.get("has_conflict", False),
-                "mergeable_state": cached_entry.get("mergeable_state", "unknown"),
+                "mergeable_state": m_state,
                 "has_user_reviewed": cached_entry.get("has_user_reviewed", False),
                 "user_review_state": cached_entry.get("user_review_state"),
             }
@@ -129,6 +146,10 @@ class RepositoryManagementService:
                 owner, repo_name, num, commit_sha=head_sha, auth_user=auth_user, pr_author=author
             )
 
+        m_state = review_summary.get("mergeable_state")
+        if not m_state:
+            m_state = "clean" if review_summary.get("has_conflict") is False else "unknown"
+
         return {
             "pr_key": pr_key,
             "repo": full_name,
@@ -136,8 +157,9 @@ class RepositoryManagementService:
             "title": pr.get("title", ""),
             "author": author,
             "is_own_pr": is_own,
-            "base_ref": (pr.get("base") or {}).get("ref", ""),
+            "base_ref": base_ref,
             "base_sha": base_sha,
+            "base_tip_sha": current_base_tip or cached_base_tip,
             "head_ref": (pr.get("head") or {}).get("ref", ""),
             "head_sha": head_sha,
             "html_url": pr.get("html_url", ""),
@@ -157,7 +179,7 @@ class RepositoryManagementService:
             "failed_checks": review_summary.get("failed_checks", []),
             "checks_status": review_summary.get("checks_status", None),
             "has_conflict": review_summary.get("has_conflict", False),
-            "mergeable_state": review_summary.get("mergeable_state", "unknown"),
+            "mergeable_state": m_state,
             "has_user_reviewed": review_summary.get("has_user_reviewed", False),
             "user_review_state": review_summary.get("user_review_state"),
         }
@@ -172,6 +194,25 @@ class RepositoryManagementService:
             prs = self.github_client.list_open_prs(owner, repo_name)
             auth_user = self.github_client.get_username()
 
+            # Pre-fetch the latest tip commit SHA for each distinct base branch of open PRs
+            # (e.g. 'main', 'staging', 'develop') so we can detect when a base branch advances
+            # (such as when another PR is merged into it).
+            base_refs = {
+                (pr.get("base") or {}).get("ref")
+                for pr in prs
+                if (pr.get("base") or {}).get("ref")
+            }
+            base_branch_tips: Dict[str, str] = {}
+            for ref in base_refs:
+                try:
+                    if hasattr(self.github_client, "get_branch"):
+                        branch_data = self.github_client.get_branch(owner, repo_name, ref)
+                        sha = ((branch_data.get("commit") or {}).get("sha")) or ""
+                        if sha:
+                            base_branch_tips[ref] = sha
+                except Exception as e:
+                    logger.debug("Could not fetch branch tip for %s/%s branch %s: %s", owner, repo_name, ref, e)
+
             # Build a lookup of existing cached PRs for fast delta matching
             with self._cache_lock:
                 cache_by_key = {p.get("pr_key"): dict(p) for p in self._cached_prs}
@@ -184,6 +225,7 @@ class RepositoryManagementService:
                     pr,
                     auth_user,
                     cache_by_key.get(f"{full_name}#{pr.get('number')}"),
+                    base_branch_tips,
                 )
                 for pr in prs
             ]

@@ -1123,12 +1123,112 @@ class TestDashboardBackend(unittest.TestCase):
         self.assertIn("⚠️ Merge Conflict", dash_html)
         self.assertIn("pr.has_conflict", dash_html)
         self.assertIn("mergeState === 'dirty'", dash_html)
+        self.assertIn("⏳ Checking Conflicts", dash_html)
+        self.assertIn("🔄 Refresh PRs", dash_html)
 
         with open("pr_details.html", "r", encoding="utf-8") as f:
             details_html = f.read()
         self.assertIn("⚠️ Merge Conflict", details_html)
         self.assertIn("pr.has_conflict", details_html)
         self.assertIn("mergeState === 'dirty'", details_html)
+        self.assertIn("⏳ Checking Conflicts", details_html)
+
+    def test_github_client_get_branch(self):
+        """Verify get_branch queries the proper GitHub API URL with URL encoding."""
+        client = GitHubClient(token="fake")
+        client._request = MagicMock(return_value={"commit": {"sha": "tip_sha_123"}})
+
+        data = client.get_branch("owner", "repo", "feature/awesome")
+        client._request.assert_called_with("GET", "/repos/owner/repo/branches/feature%2Fawesome")
+        self.assertEqual(data["commit"]["sha"], "tip_sha_123")
+
+    def test_merge_of_another_pr_invalidates_cache_via_base_tip(self):
+        """When another PR is merged into main, main's tip advances.
+        Verify other PRs (whose updated_at and base.sha did not change) have their cache invalidated,
+        detecting the new merge conflict and removing READY TO MERGE.
+        """
+        repo_service = self.backend.repository_service
+
+        # Base branch initially at tip commit base_tip_v1
+        self.gh_client.get_branch.return_value = {"commit": {"sha": "base_tip_v1"}}
+        self.gh_client.list_open_prs.return_value = [{
+            "number": 1,
+            "title": "PR 1 (Ready to Merge)",
+            "user": {"login": "dev1"},
+            "head": {"sha": "head_sha_1", "ref": "feature-1"},
+            "base": {"sha": "base_snapshot_old", "ref": "main"},
+            "updated_at": "2026-11-02T10:00:00Z"
+        }]
+
+        # PR 1 initially clean with 2 approvals -> READY TO MERGE
+        self.gh_client.get_pr_review_summary.return_value = {
+            "has_other_changes_requested": False,
+            "other_changes_requested_by": [],
+            "other_approved_by": ["senior-bot2"],
+            "outdated_approvals_by": [],
+            "outdated_changes_requested_by": [],
+            "other_commented_by": [],
+            "has_other_commented": False,
+            "has_user_auto_approved": True,
+            "has_user_manually_approved": False,
+            "has_check_error": False,
+            "failed_checks": [],
+            "checks_status": "PASSED",
+            "has_conflict": False,
+            "mergeable_state": "clean",
+            "has_user_reviewed": True,
+            "user_review_state": "APPROVED"
+        }
+        repo_service._cached_prs = []
+        self.backend.refresh_pr_cache()
+        pr = self.backend.get_annotated_status()["pull_requests"][0]
+        self.assertEqual(pr["total_approvals"], 2)
+        self.assertFalse(pr["has_conflict"])
+        self.assertTrue(pr["ready_to_merge"])
+        self.assertEqual(self.gh_client.get_pr_review_summary.call_count, 1)
+
+        # Another PR is now merged into main!
+        # Notice: GitHub API list_open_prs DOES NOT change PR 1's updated_at or base.sha!
+        # But get_branch returns the NEW tip of main: base_tip_v2
+        self.gh_client.get_branch.return_value = {"commit": {"sha": "base_tip_v2"}}
+        # And GitHub now reports PR 1 has a merge conflict
+        self.gh_client.get_pr_review_summary.return_value["has_conflict"] = True
+        self.gh_client.get_pr_review_summary.return_value["mergeable_state"] = "dirty"
+
+        self.backend.refresh_pr_cache()
+        self.assertEqual(self.gh_client.get_pr_review_summary.call_count, 2)
+
+        pr_after_merge = self.backend.get_annotated_status()["pull_requests"][0]
+        self.assertTrue(pr_after_merge["has_conflict"])
+        self.assertEqual(pr_after_merge["mergeable_state"], "dirty")
+        # Ready to merge MUST BE FALSE when conflict occurs
+        self.assertFalse(pr_after_merge["ready_to_merge"])
+
+    def test_pr_details_live_refreshes_unknown_mergeable_state(self):
+        """When get_pr_details is called on a PR with unknown mergeable state, it live-checks."""
+        self.gh_client.get_pr_mergeable_status = MagicMock(return_value={"has_conflict": True, "mergeable_state": "dirty"})
+        self.backend.repository_service._cached_prs = [{
+            "pr_key": "owner/repo1#101",
+            "repo": "owner/repo1",
+            "number": 101,
+            "title": "PR 101",
+            "author": "author",
+            "base_ref": "main",
+            "head_ref": "feature",
+            "head_sha": "sha123",
+            "status_badge": "PENDING_REVIEW",
+            "mergeable_state": "unknown",
+            "has_conflict": False,
+            "ready_to_merge": True
+        }]
+
+        details = self.backend.get_pr_details("owner/repo1#101")
+        self.assertIsNotNone(details)
+        pr = details["pr"]
+        self.assertTrue(pr["has_conflict"])
+        self.assertEqual(pr["mergeable_state"], "dirty")
+        self.assertFalse(pr["ready_to_merge"])
+        self.gh_client.get_pr_mergeable_status.assert_called_with("owner", "repo1", 101)
 
 if __name__ == "__main__":
     unittest.main()

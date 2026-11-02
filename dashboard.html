@@ -936,6 +936,7 @@
 
         <div class="section-header">
             <h2 class="section-title">Open Pull Requests</h2>
+            <button class="btn btn-sm btn-secondary" onclick="forceRefreshPrs(this)" title="Re-scan pull requests and check mergeability">🔄 Refresh PRs</button>
         </div>
 
         <div id="pr-container" class="pr-grid">
@@ -1331,6 +1332,26 @@
                 renderDashboard(data);
             } catch (err) {
                 console.error("Failed to load status:", err);
+            }
+        }
+
+        async function forceRefreshPrs(btn) {
+            if (btn) {
+                btn.disabled = true;
+                btn.classList.add('btn-loading');
+            }
+            try {
+                const res = await fetch('/api/status?force_refresh=true');
+                const data = await res.json();
+                currentStatus = data;
+                renderDashboard(data);
+            } catch (err) {
+                console.error("Failed to refresh status:", err);
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.classList.remove('btn-loading');
+                }
             }
         }
 
@@ -1737,6 +1758,8 @@
                 const mergeState = (pr.mergeable_state || '').toLowerCase();
                 if (pr.has_conflict || mergeState === 'dirty' || mergeState === 'conflicting') {
                     pills.push(`<span class="badge badge-red" title="This pull request has merge conflicts that must be resolved">⚠️ Merge Conflict</span>`);
+                } else if (mergeState === 'unknown') {
+                    pills.push(`<span class="badge badge-yellow" title="GitHub is calculating mergeability">⏳ Checking Conflicts</span>`);
                 }
 
                 const baseBranchUpper = (pr.base_ref || '').trim().toUpperCase();

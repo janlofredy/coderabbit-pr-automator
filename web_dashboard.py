@@ -419,7 +419,12 @@ class DashboardBackend:
             has_failed_checks = item.get("has_check_error", False) or (checks_status in ("FAILED", "CHECKS FAILED"))
             has_ongoing_checks = checks_status in ("ONGOING", "CHECKS ONGOING", "PENDING")
             checks_passed = (checks_status in ("PASSED", "CHECKS PASSED", "SUCCESS") or (checks_status == "" and not item.get("has_check_error", False)))
-            has_conflict = item.get("has_conflict", False)
+            mergeable_state = (item.get("mergeable_state") or "").lower()
+            if not mergeable_state:
+                mergeable_state = "clean" if not item.get("has_conflict") else "dirty"
+            has_conflict = bool(item.get("has_conflict", False) or mergeable_state in ("dirty", "conflicting"))
+            item["has_conflict"] = has_conflict
+            item["mergeable_state"] = mergeable_state
             bot_changes_req = (bot_outcome == "CHANGES_REQUESTED") or (item.get("status_badge") == "OTHER_CHANGES_REQUESTED")
 
             is_ready_to_merge = bool(
@@ -427,6 +432,7 @@ class DashboardBackend:
                 and not has_other_changes
                 and not bot_changes_req
                 and not has_conflict
+                and mergeable_state not in ("dirty", "conflicting", "unknown")
                 and not has_failed_checks
                 and not has_ongoing_checks
                 and checks_passed
@@ -531,6 +537,23 @@ class DashboardBackend:
                 "ready_to_merge": False,
                 "total_approvals": 0
             }
+
+        # If PR has unknown mergeable status, attempt a live check to resolve it
+        if target_pr and target_pr.get("mergeable_state") in ("unknown", None, ""):
+            try:
+                owner, repo_name = GitHubClient.split_repo(target_pr.get("repo", ""))
+                num = target_pr.get("number", 0)
+                if owner and repo_name and num and hasattr(self.github_client, "get_pr_mergeable_status"):
+                    conflict_summary = self.github_client.get_pr_mergeable_status(owner, repo_name, num)
+                    if isinstance(conflict_summary, dict):
+                        has_conflict = bool(conflict_summary.get("has_conflict", False))
+                        m_state = str(conflict_summary.get("mergeable_state") or "unknown").lower()
+                        target_pr["has_conflict"] = has_conflict
+                        target_pr["mergeable_state"] = m_state
+                        if has_conflict or m_state in ("dirty", "conflicting", "unknown"):
+                            target_pr["ready_to_merge"] = False
+            except Exception as e:
+                logger.debug("Could not live-fetch mergeable status for PR #%s: %s", target_pr.get("number"), e)
 
         return {
             "pr": target_pr,

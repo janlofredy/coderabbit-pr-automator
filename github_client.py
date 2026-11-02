@@ -5,6 +5,7 @@ import time
 import logging
 import urllib.request
 import urllib.error
+import urllib.parse
 from typing import Dict, Any, List, Optional, Tuple
 
 logger = logging.getLogger("github_client")
@@ -268,6 +269,11 @@ class GitHubClient:
     def get_pr(self, owner: str, repo: str, pr_number: int) -> Dict[str, Any]:
         """Retrieves detailed information for a single pull request."""
         return self._request("GET", f"/repos/{owner}/{repo}/pulls/{pr_number}")
+
+    def get_branch(self, owner: str, repo: str, branch: str) -> Dict[str, Any]:
+        """Retrieves branch details including its latest commit SHA."""
+        quoted_branch = urllib.parse.quote(branch, safe="")
+        return self._request("GET", f"/repos/{owner}/{repo}/branches/{quoted_branch}")
 
     def get_reviews_for_pr(self, owner: str, repo: str, pr_number: int) -> List[Dict[str, Any]]:
         """Retrieves reviews submitted on a pull request."""
