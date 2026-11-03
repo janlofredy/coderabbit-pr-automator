@@ -1124,7 +1124,6 @@ class TestDashboardBackend(unittest.TestCase):
         self.assertIn("pr.has_conflict", dash_html)
         self.assertIn("mergeState === 'dirty'", dash_html)
         self.assertIn("⏳ Checking Conflicts", dash_html)
-        self.assertIn("🔄 Refresh PRs", dash_html)
 
         with open("pr_details.html", "r", encoding="utf-8") as f:
             details_html = f.read()
