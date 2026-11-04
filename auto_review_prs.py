@@ -757,7 +757,8 @@ class AutoReviewEngine:
                 "author": pr_author,
                 "is_own_pr": is_own_pr
             }
-            self.state_manager.record_pr_log(pr_key, {
+            log_payload = {
+                "pr_key": pr_key,
                 "status": "RATE_LIMITED",
                 "review_outcome": "RATE_LIMITED",
                 "coderabbit_account": account_name,
@@ -779,7 +780,9 @@ class AutoReviewEngine:
                 "stdout": stdout,
                 "stderr": stderr,
                 "error": reason_msg
-            })
+            }
+            self.state_manager.record_pr_log(pr_key, log_payload)
+            self.state_manager.record_account_log(account_id, log_payload)
             self.state_manager.record_pr_status(pr_key, status_data)
             return status_data
 
@@ -809,7 +812,8 @@ class AutoReviewEngine:
                 "author": pr_author,
                 "is_own_pr": is_own_pr
             }
-            self.state_manager.record_pr_log(pr_key, {
+            log_payload = {
+                "pr_key": pr_key,
                 "status": "ERROR",
                 "review_outcome": "ERROR",
                 "coderabbit_account": account_name,
@@ -826,7 +830,9 @@ class AutoReviewEngine:
                 "stdout": stdout,
                 "stderr": stderr,
                 "error": stderr
-            })
+            }
+            self.state_manager.record_pr_log(pr_key, log_payload)
+            self.state_manager.record_account_log(account_id, log_payload)
             self.state_manager.record_pr_status(pr_key, status_data)
             return status_data
 
@@ -849,7 +855,8 @@ class AutoReviewEngine:
                            "coderabbit_account": account_name, "account_id": account_id,
                            "title": pr.get("title", ""), "html_url": pr.get("html_url", ""),
                            "author": pr_author, "is_own_pr": is_own_pr}
-            self.state_manager.record_pr_log(pr_key, {
+            log_payload = {
+                "pr_key": pr_key,
                 "status": "ERROR", "review_outcome": "ERROR", "retcode": retcode,
                 "coderabbit_account": account_name, "account_id": account_id,
                 "elapsed_seconds": round(elapsed, 1), "head_sha": head_sha,
@@ -857,7 +864,9 @@ class AutoReviewEngine:
                 "title": pr.get("title", ""), "html_url": pr.get("html_url", ""),
                 "file_count": file_count, "stdout": stdout, "stderr": stderr,
                 "error": error_message, "partial_findings": parsed.get("findings", [])
-            })
+            }
+            self.state_manager.record_pr_log(pr_key, log_payload)
+            self.state_manager.record_account_log(account_id, log_payload)
             self.state_manager.record_pr_status(pr_key, status_data)
             return status_data
 
@@ -1049,7 +1058,8 @@ class AutoReviewEngine:
                            "review_outcome": "ERROR", "head_sha": head_sha,
                            "title": pr.get("title", ""), "html_url": pr.get("html_url", ""),
                            "author": pr_author, "is_own_pr": is_own_pr}
-            self.state_manager.record_pr_log(pr_key, {
+            log_payload = {
+                "pr_key": pr_key,
                 "status": "ERROR", "review_outcome": "ERROR", "event": event,
                 "coderabbit_account": account_name, "account_id": account_id,
                 "retcode": retcode, "elapsed_seconds": round(elapsed, 1), "head_sha": head_sha,
@@ -1057,7 +1067,9 @@ class AutoReviewEngine:
                 "title": pr.get("title", ""), "html_url": pr.get("html_url", ""),
                 "file_count": file_count, "summary": summary_text, "findings": findings_list,
                 "stdout": stdout, "stderr": stderr, "error": str(e)
-            })
+            }
+            self.state_manager.record_pr_log(pr_key, log_payload)
+            self.state_manager.record_account_log(account_id, log_payload)
             self.state_manager.record_pr_status(pr_key, status_data)
             failure_comment = f"""## 🐰 CodeRabbit Review Failed
 ---
@@ -1104,7 +1116,8 @@ Review complete. Detailed findings submitted directly to this pull request.
             "is_own_pr": is_own_pr,
             "elapsed_seconds": round(elapsed, 1)
         }
-        self.state_manager.record_pr_log(pr_key, {
+        log_payload = {
+            "pr_key": pr_key,
             "status": "COMPLETED",
             "review_outcome": review_outcome,
             "coderabbit_account": account_name,
@@ -1126,7 +1139,9 @@ Review complete. Detailed findings submitted directly to this pull request.
             "findings": findings_list,
             "stdout": stdout,
             "stderr": stderr
-        })
+        }
+        self.state_manager.record_pr_log(pr_key, log_payload)
+        self.state_manager.record_account_log(account_id, log_payload)
         self.state_manager.record_pr_status(pr_key, status_data)
         return status_data
 

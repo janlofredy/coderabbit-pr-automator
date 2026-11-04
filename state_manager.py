@@ -35,7 +35,8 @@ class StateManager:
             "last_run_timestamp": "",
             "review_queue": [],
             "account_rate_limits": {},
-            "last_account_index": -1
+            "last_account_index": -1,
+            "account_logs": {}
         }
 
     def ensure_state_exists(self) -> None:
@@ -374,6 +375,126 @@ class StateManager:
             if entry.get("log_id") == log_id:
                 return entry
         return None
+
+    def record_account_log(self, account_id: str, log_entry: Dict[str, Any], max_history: int = 100) -> str:
+        """
+        Appends an execution log record for a CodeRabbit account to the persistent history.
+        Returns: the log_id generated for this entry.
+        """
+        acc_id = str(account_id or "default")
+        state = self.load_state()
+        account_logs = state.get("account_logs", {})
+        if acc_id not in account_logs or not isinstance(account_logs[acc_id], list):
+            account_logs[acc_id] = []
+
+        now = datetime.now(timezone.utc)
+        log_id = log_entry.get("log_id") or f"{int(now.timestamp() * 1000000)}_acc_{acc_id}"
+        entry = dict(log_entry)
+        entry["log_id"] = log_id
+        if "timestamp" not in entry:
+            entry["timestamp"] = now.isoformat()
+        entry["account_id"] = acc_id
+
+        account_logs[acc_id].insert(0, entry)
+        account_logs[acc_id] = account_logs[acc_id][:max_history]
+
+        state["account_logs"] = account_logs
+        self.save_state(state)
+        return log_id
+
+    def get_account_logs(self, account_id: str) -> list:
+        """
+        Retrieves list of recorded review logs for a CodeRabbit account (most recent first).
+        If no logs are found in account_logs, backfills on-the-fly from pr_logs.
+        """
+        acc_id = str(account_id or "default")
+        state = self.load_state()
+        account_logs = state.get("account_logs", {})
+
+        if acc_id in account_logs and account_logs[acc_id]:
+            return list(account_logs[acc_id])
+
+        # Backfill from pr_logs if account_logs has no records for this account
+        pr_logs = state.get("pr_logs", {})
+        backfilled = []
+        for pr_key, logs in pr_logs.items():
+            if not isinstance(logs, list):
+                continue
+            for entry in logs:
+                if not isinstance(entry, dict):
+                    continue
+                entry_acc_id = str(entry.get("account_id") or "default")
+                entry_acc_name = str(entry.get("coderabbit_account") or "")
+                # Match either by account_id, or if acc_id is default and account_id is not set / "default" / contains "default"
+                if entry_acc_id == acc_id or (acc_id == "default" and ("default" in entry_acc_id.lower() or "default" in entry_acc_name.lower() or not entry_acc_id)):
+                    item = dict(entry)
+                    if "pr_key" not in item:
+                        item["pr_key"] = pr_key
+                    item["account_id"] = acc_id
+                    backfilled.append(item)
+
+        if backfilled:
+            # Sort newest first
+            backfilled.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+            backfilled = backfilled[:100]
+            if "account_logs" not in state or not isinstance(state["account_logs"], dict):
+                state["account_logs"] = {}
+            state["account_logs"][acc_id] = backfilled
+            self.save_state(state)
+            return list(backfilled)
+
+        return list(account_logs.get(acc_id, []))
+
+    def clear_account_logs(self, account_id: str) -> None:
+        """Clears all review logs for a specific account."""
+        acc_id = str(account_id or "default")
+        state = self.load_state()
+        account_logs = state.get("account_logs", {})
+        if not isinstance(account_logs, dict):
+            account_logs = {}
+        account_logs[acc_id] = []
+        state["account_logs"] = account_logs
+        self.save_state(state)
+
+    def get_account_metrics(self, account_id: str) -> Dict[str, Any]:
+        """Calculates review performance metrics for a specific account."""
+        logs = self.get_account_logs(account_id)
+        total = len(logs)
+        approved = 0
+        commented = 0
+        errors = 0
+        durations = []
+        last_reviewed_at = ""
+
+        for entry in logs:
+            outcome = (entry.get("review_outcome") or entry.get("status") or entry.get("event") or "").upper()
+            if "APPROV" in outcome:
+                approved += 1
+            elif "COMMENT" in outcome:
+                commented += 1
+            elif "ERROR" in outcome or entry.get("status") == "ERROR":
+                errors += 1
+
+            dur = entry.get("elapsed_seconds")
+            if dur is not None:
+                try:
+                    durations.append(float(dur))
+                except (ValueError, TypeError):
+                    pass
+
+            if not last_reviewed_at and entry.get("timestamp"):
+                last_reviewed_at = entry.get("timestamp")
+
+        avg_dur = round(sum(durations) / len(durations), 1) if durations else 0.0
+
+        return {
+            "total_reviews": total,
+            "approved_count": approved,
+            "commented_count": commented,
+            "error_count": errors,
+            "avg_duration_seconds": avg_dur,
+            "last_reviewed_at": last_reviewed_at,
+        }
 
     def get_review_queue(self) -> list:
         """Retrieves the list of queued review items."""

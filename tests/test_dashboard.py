@@ -522,6 +522,83 @@ class TestDashboardBackend(unittest.TestCase):
             self.assertTrue(res["authenticated"])
             self.assertEqual(res["status"], "authenticated")
 
+    def test_account_history_api_and_clear(self):
+        import web_dashboard
+        import urllib.request
+        from http.server import HTTPServer
+
+        acc = self.cfg_mgr.add_coderabbit_account({
+            "name": "Account Hist Test",
+            "type": "api_key",
+            "api_key": "cr-hist-key",
+            "region": "us"
+        })
+        acc_id = acc["id"]
+
+        # Record history for this account
+        self.state_mgr.record_account_log(acc_id, {
+            "pr_key": "owner/repo1#101",
+            "title": "PR 101",
+            "status": "COMPLETED",
+            "review_outcome": "APPROVE",
+            "elapsed_seconds": 14.2
+        })
+
+        # Start temporary HTTP server to test endpoints
+        web_dashboard.backend = self.backend
+        server = HTTPServer(("127.0.0.1", 0), web_dashboard.DashboardRequestHandler)
+        port = server.server_port
+        import threading
+        t = threading.Thread(target=server.serve_forever, daemon=True)
+        t.start()
+        base_url = f"http://127.0.0.1:{port}"
+
+        try:
+            # 1. GET /api/coderabbit-accounts: returns Default CLI + custom accounts
+            with urllib.request.urlopen(f"{base_url}/api/coderabbit-accounts") as resp:
+                self.assertEqual(resp.status, 200)
+                accounts_res = json.loads(resp.read().decode())
+                self.assertGreaterEqual(len(accounts_res), 2)
+                # First account is Default (Global CLI)
+                self.assertEqual(accounts_res[0]["id"], "default")
+                self.assertTrue(accounts_res[0]["is_default"])
+                # Custom account is present with review_count
+                custom_acc = next((a for a in accounts_res if a["id"] == acc_id), None)
+                self.assertIsNotNone(custom_acc)
+                self.assertEqual(custom_acc["review_count"], 1)
+
+            # 2. GET /api/coderabbit-accounts/history?account_id=...
+            with urllib.request.urlopen(f"{base_url}/api/coderabbit-accounts/history?account_id={acc_id}") as resp:
+                self.assertEqual(resp.status, 200)
+                hist_res = json.loads(resp.read().decode())
+                self.assertEqual(hist_res["account_id"], acc_id)
+                self.assertEqual(hist_res["metrics"]["total_reviews"], 1)
+                self.assertEqual(hist_res["metrics"]["approved_count"], 1)
+                self.assertEqual(len(hist_res["logs"]), 1)
+                self.assertEqual(hist_res["logs"][0]["pr_key"], "owner/repo1#101")
+
+            # 3. POST /api/coderabbit-accounts/clear-history
+            req = urllib.request.Request(
+                f"{base_url}/api/coderabbit-accounts/clear-history",
+                data=json.dumps({"id": acc_id}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+            with urllib.request.urlopen(req) as resp:
+                self.assertEqual(resp.status, 200)
+                clear_res = json.loads(resp.read().decode())
+                self.assertEqual(clear_res["status"], "history_cleared")
+
+            # 4. GET history again: should now be empty
+            with urllib.request.urlopen(f"{base_url}/api/coderabbit-accounts/history?account_id={acc_id}") as resp:
+                self.assertEqual(resp.status, 200)
+                hist_after = json.loads(resp.read().decode())
+                self.assertEqual(hist_after["metrics"]["total_reviews"], 0)
+                self.assertEqual(len(hist_after["logs"]), 0)
+        finally:
+            server.shutdown()
+            server.server_close()
+
     def test_decoupled_queue_review_execution(self):
         """Verify that ReviewManagementService drains the queue using only the queue job without repo service cache."""
         review_service = self.backend.review_service

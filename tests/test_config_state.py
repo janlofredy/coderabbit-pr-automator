@@ -314,6 +314,97 @@ class TestConfigAndStateManager(unittest.TestCase):
         self.assertEqual(accounts[0]["type"], "profile")
         self.assertEqual(accounts[0]["profile_dir"], profile_path)
 
+    def test_record_and_get_account_logs(self):
+        sm = StateManager(state_path=self.state_path)
+        log1 = sm.record_account_log("acc_test_1", {
+            "pr_key": "owner/repo#10",
+            "title": "Add feature",
+            "status": "COMPLETED",
+            "review_outcome": "APPROVE",
+            "elapsed_seconds": 12.5
+        })
+        log2 = sm.record_account_log("acc_test_1", {
+            "pr_key": "owner/repo#11",
+            "title": "Bugfix",
+            "status": "ERROR",
+            "review_outcome": "ERROR",
+            "elapsed_seconds": 5.0
+        })
+
+        logs = sm.get_account_logs("acc_test_1")
+        self.assertEqual(len(logs), 2)
+        # Newest first
+        self.assertEqual(logs[0]["log_id"], log2)
+        self.assertEqual(logs[0]["review_outcome"], "ERROR")
+        self.assertEqual(logs[1]["log_id"], log1)
+        self.assertEqual(logs[1]["review_outcome"], "APPROVE")
+
+    def test_account_logs_auto_backfill_from_pr_logs(self):
+        sm = StateManager(state_path=self.state_path)
+        # Record into pr_logs without calling record_account_log
+        sm.record_pr_log("owner/repo#20", {
+            "status": "COMPLETED",
+            "review_outcome": "APPROVE",
+            "account_id": "acc_backfill",
+            "coderabbit_account": "Backfilled Account",
+            "elapsed_seconds": 15.0
+        })
+        sm.record_pr_log("owner/repo#21", {
+            "status": "COMPLETED",
+            "review_outcome": "COMMENT",
+            "account_id": "acc_backfill",
+            "coderabbit_account": "Backfilled Account",
+            "elapsed_seconds": 20.0
+        })
+
+        # Querying account logs should automatically backfill from pr_logs
+        logs = sm.get_account_logs("acc_backfill")
+        self.assertEqual(len(logs), 2)
+        outcomes = [l["review_outcome"] for l in logs]
+        self.assertIn("APPROVE", outcomes)
+        self.assertIn("COMMENT", outcomes)
+
+    def test_clear_account_logs(self):
+        sm = StateManager(state_path=self.state_path)
+        sm.record_account_log("acc_to_clear", {
+            "pr_key": "owner/repo#30",
+            "status": "COMPLETED",
+            "review_outcome": "APPROVE"
+        })
+        self.assertEqual(len(sm.get_account_logs("acc_to_clear")), 1)
+
+        sm.clear_account_logs("acc_to_clear")
+        self.assertEqual(sm.get_account_logs("acc_to_clear"), [])
+
+    def test_get_account_metrics(self):
+        sm = StateManager(state_path=self.state_path)
+        sm.record_account_log("acc_metrics", {
+            "pr_key": "owner/repo#41",
+            "status": "COMPLETED",
+            "review_outcome": "APPROVE",
+            "elapsed_seconds": 10.0
+        })
+        sm.record_account_log("acc_metrics", {
+            "pr_key": "owner/repo#42",
+            "status": "COMPLETED",
+            "review_outcome": "COMMENT",
+            "elapsed_seconds": 20.0
+        })
+        sm.record_account_log("acc_metrics", {
+            "pr_key": "owner/repo#43",
+            "status": "ERROR",
+            "review_outcome": "ERROR",
+            "elapsed_seconds": 30.0
+        })
+
+        metrics = sm.get_account_metrics("acc_metrics")
+        self.assertEqual(metrics["total_reviews"], 3)
+        self.assertEqual(metrics["approved_count"], 1)
+        self.assertEqual(metrics["commented_count"], 1)
+        self.assertEqual(metrics["error_count"], 1)
+        self.assertEqual(metrics["avg_duration_seconds"], 20.0)
+        self.assertTrue(metrics["last_reviewed_at"])
+
 if __name__ == "__main__":
     unittest.main()
 

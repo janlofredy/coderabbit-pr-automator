@@ -26,6 +26,12 @@ A headless, continuous CI/CD background automation service and real-time Web Das
   - Automatically parses cooldown duration (e.g. "try again in 15 mins") or applies backoff.
   - **Single Comment Updates**: Updates the existing PR comment via `PATCH /repos/{owner}/{repo}/issues/comments/{id}` with a live retry countdown banner instead of polluting PR conversations with new comments.
   - Persists cooldown state in `automation_state.json` to prevent burning quota.
+- **Multi-Account CodeRabbit Rotation & Cooldown Failover**:
+  - Add multiple CodeRabbit accounts (API keys or OAuth profile directories) to bypass single-account free tier rate limits.
+  - Automatically rotates available accounts and seamlessly fails over if an account hits a cooldown.
+- **Per-Account Review History & Performance Metrics**:
+  - Tracks every automated review per CodeRabbit account (including the Default Global CLI account).
+  - Dedicated **📜 History** modal with metrics (Total, Approvals, Comments, Errors, Average Duration), live filters, and direct links to PR Details and GitHub.
 - **High-Performance Real-Time Web Dashboard (Port 8765)**:
   - Multi-threaded Python server (`ThreadingMixIn`) with non-blocking concurrent polling via `ThreadPoolExecutor` (sub-millisecond `/api/status`).
   - Complete raw CodeRabbit CLI stdout and stderr are written to container logs and retained in each PR's **Details & Logs** history.
@@ -148,6 +154,8 @@ If no accounts are configured in the dashboard, the application automatically us
 | `/api/coderabbit-accounts/remove` | `POST` | Deletes a CodeRabbit account (`id`) |
 | `/api/coderabbit-accounts/test` | `POST` | Probes CodeRabbit CLI authentication for an account |
 | `/api/coderabbit-accounts/clear-cooldown` | `POST` | Clears rate limit cooldown for a specific account (`id`) |
+| `/api/coderabbit-accounts/history` | `GET` | Returns review execution history and performance metrics for an account (`?account_id=<id>`) |
+| `/api/coderabbit-accounts/clear-history` | `POST` | Clears review execution history for an account (`{"id": "<id>"}`) |
 | `/api/config` | `GET` | Returns runtime operational settings (`poll_interval_seconds`, `max_files_limit`, etc.) |
 | `/api/config` | `POST` | Updates runtime operational settings in `config.json` live |
 | `/api/strict-approval/toggle` | `POST` | Toggles strict approval mode on/off |

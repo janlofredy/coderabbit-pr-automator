@@ -492,9 +492,22 @@ class DashboardBackend:
                     "verified_username": a.get("verified_username"),
                     "verified_email": a.get("verified_email"),
                     "verified_orgs": a.get("verified_orgs", []),
+                    "review_count": self.state_manager.get_account_metrics(a.get("id", "")).get("total_reviews", 0),
+                    "last_active": self.state_manager.get_account_metrics(a.get("id", "")).get("last_reviewed_at", ""),
                 }
                 for a in config.get("coderabbit_accounts", [])
             ],
+            "default_account": {
+                "id": "default",
+                "name": "Default (Global CLI)",
+                "type": "cli",
+                "enabled": True,
+                "is_default": True,
+                "rate_limited": self.state_manager.is_account_rate_limited("default")[0],
+                "cooldown_remaining": self.state_manager.is_account_rate_limited("default")[1],
+                "review_count": self.state_manager.get_account_metrics("default").get("total_reviews", 0),
+                "last_active": self.state_manager.get_account_metrics("default").get("last_reviewed_at", ""),
+            },
             "account_rate_limits": self.state_manager.get_account_rate_limits(),
         }
 
@@ -681,14 +694,39 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         if path == "/api/coderabbit-accounts":
             accounts = backend.config_manager.get_coderabbit_accounts()
             safe_accounts = []
+
+            # Always include Default (Global CLI) account
+            def_is_rl, def_rem, def_reason = backend.state_manager.is_account_rate_limited("default")
+            def_metrics = backend.state_manager.get_account_metrics("default")
+            safe_accounts.append({
+                "id": "default",
+                "name": "Default (Global CLI)",
+                "type": "cli",
+                "region": "us",
+                "enabled": True,
+                "is_default": True,
+                "profile_dir": os.path.expanduser("~/.coderabbit"),
+                "api_key_masked": "",
+                "has_key": False,
+                "rate_limited": def_is_rl,
+                "cooldown_remaining": def_rem,
+                "rate_limit_reason": def_reason,
+                "review_count": def_metrics.get("total_reviews", 0),
+                "last_active": def_metrics.get("last_reviewed_at", ""),
+                "metrics": def_metrics,
+            })
+
             for a in accounts:
-                is_rl, rem, reason = backend.state_manager.is_account_rate_limited(a.get("id", ""))
+                acc_id = a.get("id", "")
+                is_rl, rem, reason = backend.state_manager.is_account_rate_limited(acc_id)
+                acc_metrics = backend.state_manager.get_account_metrics(acc_id)
                 safe_accounts.append({
-                    "id": a.get("id"),
+                    "id": acc_id,
                     "name": a.get("name"),
                     "type": a.get("type", "api_key"),
                     "region": a.get("region", "us"),
                     "enabled": a.get("enabled", True),
+                    "is_default": False,
                     "profile_dir": a.get("profile_dir", ""),
                     "api_key_masked": f"{a.get('api_key')[:4]}...{a.get('api_key')[-4:]}" if a.get("api_key") and len(a.get("api_key")) > 8 else ("configured" if a.get("api_key") else ""),
                     "has_key": bool(a.get("api_key")),
@@ -698,9 +736,25 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     "verified_username": a.get("verified_username"),
                     "verified_email": a.get("verified_email"),
                     "verified_orgs": a.get("verified_orgs", []),
+                    "review_count": acc_metrics.get("total_reviews", 0),
+                    "last_active": acc_metrics.get("last_reviewed_at", ""),
+                    "metrics": acc_metrics,
                 })
             self._set_headers(200)
             self.wfile.write(json.dumps(safe_accounts).encode("utf-8"))
+            return
+
+        if path == "/api/coderabbit-accounts/history":
+            query_params = parse_qs(parsed.query)
+            acc_id = query_params.get("account_id", query_params.get("id", ["default"]))[0].strip() or "default"
+            logs = backend.state_manager.get_account_logs(acc_id)
+            metrics = backend.state_manager.get_account_metrics(acc_id)
+            self._set_headers(200)
+            self.wfile.write(json.dumps({
+                "account_id": acc_id,
+                "metrics": metrics,
+                "logs": logs
+            }).encode("utf-8"))
             return
 
 
@@ -866,7 +920,9 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         if path == "/api/coderabbit-accounts/test":
             acc_id = data.get("id")
             target_account = None
-            if acc_id:
+            if acc_id == "default":
+                target_account = {"id": "default", "name": "Default (Global CLI)", "type": "cli"}
+            elif acc_id:
                 target_account = next((a for a in backend.config_manager.get_coderabbit_accounts() if a.get("id") == acc_id), None)
             else:
                 target_account = data
@@ -886,6 +942,13 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             backend.state_manager.clear_rate_limit(acc_id)
             self._set_headers(200)
             self.wfile.write(json.dumps({"status": "cooldown_cleared", "id": acc_id}).encode("utf-8"))
+            return
+
+        if path == "/api/coderabbit-accounts/clear-history":
+            acc_id = data.get("id") or data.get("account_id") or "default"
+            backend.state_manager.clear_account_logs(acc_id)
+            self._set_headers(200)
+            self.wfile.write(json.dumps({"status": "history_cleared", "id": acc_id}).encode("utf-8"))
             return
 
         self._set_headers(404, "text/plain")

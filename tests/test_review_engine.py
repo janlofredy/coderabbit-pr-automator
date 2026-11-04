@@ -515,6 +515,48 @@ Review complete. Detailed findings submitted directly to this pull request."""
         self.assertNotIn("did not provide a line number", comment["body"])
         self.assertIn("Update the Markdown cleanup pipeline", comment["body"])
 
+    def test_review_records_account_history_for_specific_and_default_account(self):
+        self.gh_client.get_username.return_value = "coderabbit-bot"
+        self.gh_client.has_user_reviewed_sha.return_value = (False, None)
+        self.gh_client.create_or_update_comment.return_value = {"id": 901}
+        self.gh_client.submit_pull_request_review.return_value = {"id": 902}
+
+        repo_info = {"full_name": "owner/account-repo", "path": os.path.join(self.repos_dir, "owner/account-repo")}
+        pr = {
+            "number": 55,
+            "title": "Account review test PR",
+            "changed_files": 1,
+            "user": {"login": "contributor"},
+            "base": {"ref": "main"},
+            "head": {"ref": "patch-acc", "sha": "acc12345"},
+            "html_url": "https://github.com/owner/account-repo/pull/55"
+        }
+
+        cli_output = '{"findings": [], "summary": "No issues found."}'
+        test_account = {"id": "acc_review_run_1", "name": "Dedicated Reviewer", "type": "api_key"}
+
+        with patch.object(self.engine, "prepare_repo", return_value=True), \
+             patch.object(self.engine, "checkout_pr", return_value=True), \
+             patch.object(self.engine, "count_changed_files", return_value=1), \
+             patch.object(self.engine, "get_valid_diff_lines", return_value={}), \
+             patch.object(self.engine, "execute_coderabbit_cli", return_value=(0, cli_output, "")):
+
+            res = self.engine.review_single_pr(repo_info, pr, account=test_account)
+
+        self.assertEqual(res["status"], "COMPLETED")
+        # Check that state_manager has recorded the account review history
+        account_logs = self.state_mgr.get_account_logs("acc_review_run_1")
+        self.assertEqual(len(account_logs), 1)
+        self.assertEqual(account_logs[0]["pr_key"], "owner/account-repo#55")
+        self.assertEqual(account_logs[0]["account_id"], "acc_review_run_1")
+        self.assertEqual(account_logs[0]["coderabbit_account"], "Dedicated Reviewer")
+        self.assertEqual(account_logs[0]["review_outcome"], "APPROVED")
+
+        # Check metrics
+        metrics = self.state_mgr.get_account_metrics("acc_review_run_1")
+        self.assertEqual(metrics["total_reviews"], 1)
+        self.assertEqual(metrics["approved_count"], 1)
+
 if __name__ == "__main__":
     unittest.main()
 
