@@ -45,24 +45,48 @@ class GitHubClient:
         if payload is not None:
             headers["Content-Type"] = "application/json"
 
-        req = urllib.request.Request(url, data=payload, headers=headers, method=method)
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                resp_body = resp.read().decode("utf-8")
-                if resp_body:
-                    return json.loads(resp_body)
-                return {}
-        except urllib.error.HTTPError as e:
-            error_body = e.read().decode("utf-8", errors="replace")
-            logger.error("GitHub API error %s on %s %s: %s", e.code, method, url, error_body)
+        max_retries = 3
+        for attempt in range(max_retries):
+            req = urllib.request.Request(url, data=payload, headers=headers, method=method)
             try:
-                err_json = json.loads(error_body)
-            except Exception:
-                err_json = {"message": error_body}
-            raise GitHubAPIException(e.code, err_json.get("message", error_body), err_json) from e
-        except urllib.error.URLError as e:
-            logger.error("Network error accessing GitHub API on %s %s: %s", method, url, e)
-            raise GitHubAPIException(0, str(e.reason), {}) from e
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    resp_body = resp.read().decode("utf-8")
+                    if resp_body:
+                        return json.loads(resp_body)
+                    return {}
+            except urllib.error.HTTPError as e:
+                error_body = e.read().decode("utf-8", errors="replace")
+                is_rate_limit = e.code in (429,) or (
+                    e.code == 403 and (
+                        "secondary rate limit" in error_body.lower()
+                        or "rate limit" in error_body.lower()
+                    )
+                )
+                is_transient = e.code in (500, 502, 503, 504)
+                if (is_rate_limit or is_transient) and attempt < max_retries - 1:
+                    retry_after = 1.5 * (attempt + 1)
+                    header_retry = e.headers.get("Retry-After") if hasattr(e, "headers") and e.headers else None
+                    if header_retry and str(header_retry).isdigit():
+                        retry_after = min(float(header_retry), 10.0)
+                    logger.warning(
+                        "GitHub API %s on %s %s (attempt %d/%d). Retrying in %.1fs...",
+                        e.code, method, url, attempt + 1, max_retries, retry_after
+                    )
+                    time.sleep(retry_after)
+                    continue
+
+                logger.error("GitHub API error %s on %s %s: %s", e.code, method, url, error_body)
+                try:
+                    err_json = json.loads(error_body)
+                except Exception:
+                    err_json = {"message": error_body}
+                raise GitHubAPIException(e.code, err_json.get("message", error_body), err_json) from e
+            except urllib.error.URLError as e:
+                if attempt < max_retries - 1:
+                    time.sleep(1.0 * (attempt + 1))
+                    continue
+                logger.error("Network error accessing GitHub API on %s %s: %s", method, url, e)
+                raise GitHubAPIException(0, str(e.reason), {}) from e
 
     def resolve_previous_review_threads(
         self,

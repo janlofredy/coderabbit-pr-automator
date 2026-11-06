@@ -76,7 +76,15 @@ class DashboardBackend:
 
     def fetch_repo_prs(self, repo_info: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Compatibility facade; repository discovery lives in its service."""
-        return self.repository_service.fetch_repo_prs(repo_info)
+        res = self.repository_service.fetch_repo_prs(repo_info)
+        return res if res is not None else []
+
+    def stop(self) -> None:
+        """Stops background workers and cleanly shuts down executors."""
+        self._is_running = False
+        if hasattr(self.repository_service, "shutdown"):
+            self.repository_service.shutdown(wait=False)
+        self._executor.shutdown(wait=False)
 
     def refresh_pr_cache(self) -> None:
         """Compatibility facade; repository cache management lives in its service."""

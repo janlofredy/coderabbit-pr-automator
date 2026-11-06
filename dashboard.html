@@ -331,13 +331,61 @@
         .repo-pr-group { grid-column: 1 / -1; }
         .repo-pr-group-header {
             display: flex;
-            align-items: baseline;
-            gap: 0.6rem;
+            align-items: center;
             margin: 0 0 0.85rem;
             color: var(--text-main);
             font-size: 1rem;
         }
-        .repo-pr-group-count { color: var(--text-muted); font-size: 0.8rem; font-weight: 500; }
+        .repo-pr-collapse-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.65rem;
+            background: transparent;
+            border: none;
+            padding: 0.4rem 0.65rem;
+            margin: -0.4rem -0.65rem;
+            border-radius: 8px;
+            color: var(--text-main);
+            font-size: 1.05rem;
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
+            text-align: left;
+            user-select: none;
+            transition: background 0.15s ease, color 0.15s ease;
+        }
+        .repo-pr-collapse-btn:hover {
+            background: rgba(255, 255, 255, 0.06);
+        }
+        .repo-pr-collapse-btn:focus-visible {
+            outline: 2px solid var(--primary);
+            outline-offset: 2px;
+        }
+        .repo-collapse-icon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-muted);
+            transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .repo-pr-collapse-btn[aria-expanded="false"] .repo-collapse-icon {
+            transform: rotate(-90deg);
+        }
+        .repo-pr-group-count {
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            font-weight: 500;
+            background: rgba(255, 255, 255, 0.05);
+            padding: 0.15rem 0.5rem;
+            border-radius: 9999px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .repo-pr-content {
+            transition: opacity 0.2s ease;
+        }
+        .repo-pr-content[hidden] {
+            display: none !important;
+        }
         .repo-pr-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(min(420px, 100%), 1fr));
@@ -1484,7 +1532,7 @@
 
             // PR Grid & Review Queue
             const reviewQueue = data.review_queue || { active: null, pending: [] };
-            renderPRs(data.pull_requests || [], reviewQueue);
+            renderPRs(data.pull_requests || [], reviewQueue, data.repositories || []);
             renderReviewQueue(reviewQueue, data.pull_requests || []);
             updateQueueHeaderButton(reviewQueue, data.rate_limited, data.rate_limit_remaining_seconds, data.rate_limit_reason);
         }
@@ -1719,9 +1767,38 @@
             return getBotReviewStatus(pr);
         }
 
-        function renderPRs(prs, queue = { active: null, pending: [] }) {
+        const collapsedRepos = new Set(JSON.parse(localStorage.getItem('coderabbit_collapsed_repos') || '[]'));
+
+        function toggleRepoCollapse(repoName, event) {
+            if (event) {
+                event.preventDefault();
+                event.stopPropagation();
+            }
+            if (collapsedRepos.has(repoName)) {
+                collapsedRepos.delete(repoName);
+            } else {
+                collapsedRepos.add(repoName);
+            }
+            try {
+                localStorage.setItem('coderabbit_collapsed_repos', JSON.stringify(Array.from(collapsedRepos)));
+            } catch (e) {}
+
+            const btn = document.querySelector(`[data-collapse-repo="${CSS.escape(repoName)}"]`);
+            const targetId = btn?.getAttribute('aria-controls');
+            const content = targetId ? document.getElementById(targetId) : null;
+            if (btn && content) {
+                const isNowCollapsed = collapsedRepos.has(repoName);
+                btn.setAttribute('aria-expanded', isNowCollapsed ? 'false' : 'true');
+                btn.title = isNowCollapsed ? 'Expand pull requests' : 'Collapse pull requests';
+                content.hidden = isNowCollapsed;
+            }
+        }
+
+        function renderPRs(prs, queue = { active: null, pending: [] }, repositories = []) {
             const container = document.getElementById('pr-container');
-            if (!prs || prs.length === 0) {
+            const enabledRepos = (repositories || []).filter(r => r.enabled);
+
+            if ((!prs || prs.length === 0) && enabledRepos.length === 0) {
                 container.innerHTML = `
                     <div class="empty-state" style="grid-column: 1 / -1;">
                         <h3>✨ All Caught Up</h3>
@@ -1735,17 +1812,57 @@
             const queuedPrKeys = new Set((queue.pending || []).map(item => item.pr_key));
 
             const groupedPRs = new Map();
-            prs.forEach(pr => {
+            // Pre-seed enabled repositories in configured order so they always appear
+            enabledRepos.forEach(r => {
+                if (r.full_name) groupedPRs.set(r.full_name, []);
+            });
+
+            (prs || []).forEach(pr => {
                 const repo = pr.repo || 'Other repositories';
                 if (!groupedPRs.has(repo)) groupedPRs.set(repo, []);
                 groupedPRs.get(repo).push(pr);
             });
 
-            container.innerHTML = Array.from(groupedPRs.entries()).map(([repo, repoPRs]) => `
-                <section class="repo-pr-group">
-                    <h3 class="repo-pr-group-header">📁 ${escapeHtml(repo)} <span class="repo-pr-group-count">${repoPRs.length} ${repoPRs.length === 1 ? 'pull request' : 'pull requests'}</span></h3>
-                    <div class="repo-pr-grid">
-                        ${repoPRs.map(pr => {
+            if (groupedPRs.size === 0) {
+                container.innerHTML = `
+                    <div class="empty-state" style="grid-column: 1 / -1;">
+                        <h3>✨ All Caught Up</h3>
+                        <p>No open pull requests detected in your enabled repositories.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = Array.from(groupedPRs.entries()).map(([repo, repoPRs]) => {
+                const isCollapsed = collapsedRepos.has(repo);
+                const repoSafeId = repo.replace(/[^a-zA-Z0-9_-]/g, '_');
+                return `
+                <section class="repo-pr-group" data-repo="${escapeHtml(repo)}">
+                    <h3 class="repo-pr-group-header">
+                        <button type="button" 
+                                class="repo-pr-collapse-btn" 
+                                data-collapse-repo="${escapeHtml(repo)}"
+                                aria-expanded="${isCollapsed ? 'false' : 'true'}"
+                                aria-controls="repo-content-${escapeHtml(repoSafeId)}"
+                                onclick="toggleRepoCollapse('${escapeHtml(repo)}', event)"
+                                title="${isCollapsed ? 'Expand pull requests' : 'Collapse pull requests'}">
+                            <span class="repo-collapse-icon" aria-hidden="true">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                    <polyline points="6 9 12 15 18 9"></polyline>
+                                </svg>
+                            </span>
+                            <span>📁 ${escapeHtml(repo)}</span>
+                            <span class="repo-pr-group-count">${repoPRs.length} ${repoPRs.length === 1 ? 'pull request' : 'pull requests'}</span>
+                        </button>
+                    </h3>
+                    <div id="repo-content-${escapeHtml(repoSafeId)}" class="repo-pr-content" ${isCollapsed ? 'hidden' : ''}>
+                        ${repoPRs.length === 0 ? `
+                            <div class="empty-state" style="padding: 1.5rem; margin-top: 0.5rem; grid-column: 1 / -1;">
+                                <p style="margin: 0; color: var(--text-muted); font-size: 0.85rem;">✨ No open pull requests in this repository.</p>
+                            </div>
+                        ` : `
+                        <div class="repo-pr-grid">
+                            ${repoPRs.map(pr => {
                 const isOngoing = activePrKey === pr.pr_key;
                 const isQueued = queuedPrKeys.has(pr.pr_key);
                 // Generate status pills
@@ -1846,9 +1963,12 @@
                 </div>
                 `;
             }).join('')}
+                        </div>
+                        `}
                     </div>
                 </section>
-            `).join('');
+                `;
+            }).join('');
         }
 
         function escapeHtml(text) {

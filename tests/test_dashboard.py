@@ -1306,6 +1306,167 @@ class TestDashboardBackend(unittest.TestCase):
         self.assertFalse(pr["ready_to_merge"])
         self.gh_client.get_pr_mergeable_status.assert_called_with("owner", "repo1", 101)
 
+    def test_multi_repo_many_prs_does_not_deadlock(self):
+        """Verify multiple enabled repos with many PRs execute concurrently without deadlocking."""
+        self.cfg_mgr.save_config({
+            "repositories": [
+                {"full_name": "owner/repo1", "enabled": True},
+                {"full_name": "owner/repo2", "enabled": True},
+                {"full_name": "owner/repo3", "enabled": True},
+            ],
+            "service_enabled": True
+        })
+
+        def fake_list_prs(owner, repo):
+            return [
+                {
+                    "number": i,
+                    "title": f"PR {repo} #{i}",
+                    "user": {"login": f"dev_{i}"},
+                    "base": {"ref": "main", "sha": "base_sha"},
+                    "head": {"ref": f"feat_{i}", "sha": f"head_{i}"},
+                    "html_url": f"https://github.com/{owner}/{repo}/pull/{i}",
+                    "created_at": "2026-11-01T00:00:00Z",
+                    "updated_at": f"2026-11-01T00:{i:02d}:00Z"
+                }
+                for i in range(1, 11)
+            ]
+
+        self.gh_client.list_open_prs.side_effect = fake_list_prs
+        self.gh_client.get_pr_review_summary.return_value = {
+            "has_other_changes_requested": False,
+            "other_changes_requested_by": [],
+            "other_approved_by": [],
+            "outdated_approvals_by": [],
+            "outdated_changes_requested_by": [],
+            "other_commented_by": [],
+            "has_other_commented": False,
+            "has_user_auto_approved": False,
+            "has_user_manually_approved": False,
+            "has_check_error": False,
+            "failed_checks": [],
+            "checks_status": "PASSED",
+            "has_conflict": False,
+            "mergeable_state": "clean",
+            "has_user_reviewed": False,
+            "user_review_state": None
+        }
+
+        self.backend.repository_service._cached_prs = []
+        self.backend.refresh_pr_cache()
+
+        status = self.backend.get_annotated_status()
+        prs = status["pull_requests"]
+        # 3 repos * 10 PRs = 30 PRs total
+        self.assertEqual(len(prs), 30)
+        repos_found = {p["repo"] for p in prs}
+        self.assertEqual(repos_found, {"owner/repo1", "owner/repo2", "owner/repo3"})
+
+    def test_cache_preserves_other_repo_when_one_repo_fails(self):
+        """When one repository encounters an error (e.g. rate limit), other repos and previous cache are preserved."""
+        self.cfg_mgr.save_config({
+            "repositories": [
+                {"full_name": "owner/repo1", "enabled": True},
+                {"full_name": "owner/repo2", "enabled": True},
+            ],
+            "service_enabled": True
+        })
+
+        # Run 1: Both repos succeed
+        def fake_list_prs_run1(owner, repo):
+            count = 5 if repo == "repo1" else 3
+            return [
+                {
+                    "number": i,
+                    "title": f"PR {repo} #{i}",
+                    "user": {"login": f"dev_{i}"},
+                    "base": {"ref": "main", "sha": "base_sha"},
+                    "head": {"ref": f"feat_{i}", "sha": f"head_{i}"},
+                    "html_url": f"https://github.com/{owner}/{repo}/pull/{i}",
+                    "created_at": "2026-11-01T00:00:00Z",
+                    "updated_at": f"2026-11-01T00:{i:02d}:00Z"
+                }
+                for i in range(1, count + 1)
+            ]
+
+        self.gh_client.list_open_prs.side_effect = fake_list_prs_run1
+        self.backend.repository_service._cached_prs = []
+        self.backend.refresh_pr_cache()
+
+        initial_prs = self.backend.get_annotated_status()["pull_requests"]
+        self.assertEqual(len(initial_prs), 8)
+        self.assertEqual({p["repo"] for p in initial_prs}, {"owner/repo1", "owner/repo2"})
+
+        # Run 2: repo1 succeeds with 6 PRs, but repo2 throws secondary rate limit / exception
+        from github_client import GitHubAPIException
+        def fake_list_prs_run2(owner, repo):
+            if repo == "repo2":
+                raise GitHubAPIException(403, "You have exceeded a secondary rate limit", {})
+            return [
+                {
+                    "number": i,
+                    "title": f"PR {repo} #{i}",
+                    "user": {"login": f"dev_{i}"},
+                    "base": {"ref": "main", "sha": "base_sha"},
+                    "head": {"ref": f"feat_{i}", "sha": f"head_{i}"},
+                    "html_url": f"https://github.com/{owner}/{repo}/pull/{i}",
+                    "created_at": "2026-11-01T00:00:00Z",
+                    "updated_at": f"2026-11-01T00:{i:02d}:00Z"
+                }
+                for i in range(1, 7)
+            ]
+
+        self.gh_client.list_open_prs.side_effect = fake_list_prs_run2
+        self.backend.refresh_pr_cache()
+
+        updated_prs = self.backend.get_annotated_status()["pull_requests"]
+        # repo1 has 6 new PRs, repo2's 3 previously cached PRs are retained -> 9 PRs total
+        self.assertEqual(len(updated_prs), 9)
+        self.assertEqual({p["repo"] for p in updated_prs}, {"owner/repo1", "owner/repo2"})
+
+    def test_dashboard_html_contains_empty_repo_handling(self):
+        """Verify dashboard.html pre-seeds enabled repositories and handles empty repo groups."""
+        with open("dashboard.html", "r", encoding="utf-8") as f:
+            html = f.read()
+        self.assertIn("enabledRepos.forEach", html)
+        self.assertIn("No open pull requests in this repository", html)
+        self.assertIn("repo-pr-collapse-btn", html)
+        self.assertIn("toggleRepoCollapse", html)
+        self.assertIn("aria-expanded", html)
+
+    def test_github_client_retry_on_secondary_rate_limit(self):
+        """Verify GitHubClient._request retries on secondary rate limit 403 before succeeding."""
+        import urllib.error
+        from io import BytesIO
+        from unittest.mock import patch
+
+        client = GitHubClient(token="fake-token")
+
+        attempt = 0
+        def fake_urlopen(req, timeout=30):
+            nonlocal attempt
+            attempt += 1
+            if attempt == 1:
+                fp = BytesIO(b'{"message": "You have exceeded a secondary rate limit. Please wait a few minutes."}')
+                raise urllib.error.HTTPError(
+                    url=req.full_url,
+                    code=403,
+                    msg="Forbidden",
+                    hdrs={"Retry-After": "0"},
+                    fp=fp
+                )
+            # Second attempt succeeds
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = b'{"success": true}'
+            mock_resp.__enter__.return_value = mock_resp
+            mock_resp.__exit__.return_value = None
+            return mock_resp
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            res = client._request("GET", "/test-endpoint")
+            self.assertEqual(res, {"success": True})
+            self.assertEqual(attempt, 2)
+
 if __name__ == "__main__":
     unittest.main()
 

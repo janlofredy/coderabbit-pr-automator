@@ -21,15 +21,22 @@ class RepositoryManagementService:
         config_manager: ConfigManager,
         github_client: GitHubClient,
         executor: Optional[ThreadPoolExecutor] = None,
+        pr_executor: Optional[ThreadPoolExecutor] = None,
     ):
         self.config_manager = config_manager
         self.github_client = github_client
         self._executor = executor or ThreadPoolExecutor(max_workers=5)
+        self._pr_executor = pr_executor or ThreadPoolExecutor(max_workers=10, thread_name_prefix="repo-pr")
         self._cached_prs: List[Dict[str, Any]] = []
         self._cache_lock = threading.Lock()
         self._status_lock = threading.Lock()
         self._activity_lock = threading.Lock()
         self._status = {"active": False, "phase": "IDLE", "message": ""}
+
+    def shutdown(self, wait: bool = False) -> None:
+        """Shuts down the dedicated PR worker thread pool."""
+        if hasattr(self, "_pr_executor"):
+            self._pr_executor.shutdown(wait=wait)
 
     def _set_status(self, active: bool, phase: str, message: str = "") -> None:
         with self._status_lock:
@@ -184,7 +191,56 @@ class RepositoryManagementService:
             "user_review_state": review_summary.get("user_review_state"),
         }
 
-    def fetch_repo_prs(self, repo_info: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _build_fallback_pr_item(
+        self,
+        full_name: str,
+        pr: Dict[str, Any],
+        auth_user: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        num = pr.get("number")
+        pr_key = f"{full_name}#{num}"
+        author = (pr.get("user") or {}).get("login", "")
+        is_own = bool(auth_user and author.lower() == auth_user.lower())
+        head_sha = (pr.get("head") or {}).get("sha", "")
+        base_ref = (pr.get("base") or {}).get("ref", "")
+        base_sha = (pr.get("base") or {}).get("sha", "")
+        updated_at = pr.get("updated_at", "")
+
+        return {
+            "pr_key": pr_key,
+            "repo": full_name,
+            "number": num,
+            "title": pr.get("title", ""),
+            "author": author,
+            "is_own_pr": is_own,
+            "base_ref": base_ref,
+            "base_sha": base_sha,
+            "base_tip_sha": "",
+            "head_ref": (pr.get("head") or {}).get("ref", ""),
+            "head_sha": head_sha,
+            "html_url": pr.get("html_url", ""),
+            "created_at": pr.get("created_at", ""),
+            "updated_at": updated_at,
+            "has_other_changes_requested": False,
+            "other_changes_requested_by": [],
+            "other_approved_by": [],
+            "outdated_approvals_by": [],
+            "outdated_changes_requested_by": [],
+            "other_commented_by": [],
+            "has_other_commented": False,
+            "has_user_auto_approved": False,
+            "has_user_manually_approved": False,
+            "author_approved_in_text": False,
+            "has_check_error": False,
+            "failed_checks": [],
+            "checks_status": None,
+            "has_conflict": False,
+            "mergeable_state": "unknown",
+            "has_user_reviewed": False,
+            "user_review_state": None,
+        }
+
+    def fetch_repo_prs(self, repo_info: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
         full_name = repo_info.get("full_name", "")
         if not full_name:
             return []
@@ -192,6 +248,11 @@ class RepositoryManagementService:
         owner, repo_name = GitHubClient.split_repo(full_name)
         try:
             prs = self.github_client.list_open_prs(owner, repo_name)
+        except Exception as e:
+            logger.warning("Error fetching open PR list for %s: %s", full_name, e)
+            return None
+
+        try:
             auth_user = self.github_client.get_username()
 
             # Pre-fetch the latest tip commit SHA for each distinct base branch of open PRs
@@ -217,9 +278,9 @@ class RepositoryManagementService:
             with self._cache_lock:
                 cache_by_key = {p.get("pr_key"): dict(p) for p in self._cached_prs}
 
-            # Fetch PR details concurrently using thread pool
+            # Fetch PR details concurrently using dedicated PR worker pool to avoid deadlock
             futures = [
-                self._executor.submit(
+                self._pr_executor.submit(
                     self._build_pr_item,
                     full_name,
                     pr,
@@ -231,39 +292,76 @@ class RepositoryManagementService:
             ]
 
             results = []
-            for f in futures:
+            for pr, f in zip(prs, futures):
                 try:
                     results.append(f.result())
                 except Exception as e:
-                    logger.warning("Error building PR item for %s: %s", full_name, e)
+                    logger.warning("Error building PR item for %s#%s: %s", full_name, pr.get("number"), e)
+                    cached = cache_by_key.get(f"{full_name}#{pr.get('number')}")
+                    if cached:
+                        results.append(cached)
+                    else:
+                        results.append(self._build_fallback_pr_item(full_name, pr, auth_user))
 
             return results
         except Exception as e:
-            logger.warning("Error fetching PRs for %s: %s", full_name, e)
-            return []
+            logger.warning("Error processing PR details for %s: %s", full_name, e)
+            return None
 
     def refresh_pr_cache(self) -> List[Dict[str, Any]]:
         """Fetch open PRs for enabled repositories concurrently and cache them."""
         with self._activity("CHECKING_REPOSITORIES", "Loading enabled repository configuration"):
             enabled_repos = self.config_manager.get_enabled_repos()
+            enabled_repo_names = {r.get("full_name", "").lower() for r in enabled_repos if r.get("full_name")}
             self._set_status(
                 True,
                 "FETCHING_PULL_REQUESTS",
                 f"Fetching open pull requests from {len(enabled_repos)} enabled repositories",
             )
-            futures = [self._executor.submit(self.fetch_repo_prs, repo) for repo in enabled_repos]
-            collected = []
-            for future in futures:
+            future_to_repo = {
+                self._executor.submit(self.fetch_repo_prs, repo): repo
+                for repo in enabled_repos
+            }
+
+            # Map of repo_full_name (lower) -> List of PR items
+            # Pre-populate from existing cache for currently enabled repos
+            with self._cache_lock:
+                repo_prs_map: Dict[str, List[Dict[str, Any]]] = {}
+                for pr in self._cached_prs:
+                    repo_key = (pr.get("repo") or "").lower()
+                    if repo_key in enabled_repo_names:
+                        repo_prs_map.setdefault(repo_key, []).append(dict(pr))
+
+            for future, repo_info in future_to_repo.items():
+                full_name = repo_info.get("full_name", "")
+                repo_key = full_name.lower()
                 try:
-                    collected.extend(future.result())
+                    repo_results = future.result()
+                    if repo_results is not None:
+                        # Fetch succeeded! Update cache for this repo
+                        repo_prs_map[repo_key] = repo_results
+                    else:
+                        # Fetch failed, keep existing cached PRs for this repo if any
+                        logger.warning(
+                            "Fetch failed for repository %s; preserving %d cached PR(s)",
+                            full_name, len(repo_prs_map.get(repo_key, []))
+                        )
                 except Exception as e:
-                    logger.error("Exception during repository PR fetch: %s", e)
+                    logger.error(
+                        "Exception during repository PR fetch for %s: %s; preserving cache",
+                        full_name, e
+                    )
+
+            # Flatten and sort all PRs across repositories
+            collected = []
+            for pr_list in repo_prs_map.values():
+                collected.extend(pr_list)
 
             collected.sort(key=lambda item: item.get("updated_at", ""), reverse=True)
             self._set_status(True, "UPDATING_PR_CACHE", f"Updating cache with {len(collected)} open pull requests")
             with self._cache_lock:
                 self._cached_prs = collected
-            logger.info("PR cache refreshed: %d open PR(s) found.", len(collected))
+            logger.info("PR cache refreshed: %d open PR(s) found across %d repositories.", len(collected), len(enabled_repos))
             return collected
 
     def get_cached_prs(self) -> List[Dict[str, Any]]:
