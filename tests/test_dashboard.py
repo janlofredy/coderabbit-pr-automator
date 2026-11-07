@@ -1434,6 +1434,15 @@ class TestDashboardBackend(unittest.TestCase):
         self.assertIn("toggleRepoCollapse", html)
         self.assertIn("aria-expanded", html)
 
+    def test_dashboard_html_contains_format_date_and_account_history(self):
+        """Verify dashboard.html defines formatDate and includes account review history modal logic."""
+        with open("dashboard.html", "r", encoding="utf-8") as f:
+            html = f.read()
+        self.assertIn("function formatDate(", html)
+        self.assertIn("openAccountHistoryModal", html)
+        self.assertIn("account-history-modal", html)
+        self.assertIn("acc-history-logs-container", html)
+
     def test_github_client_retry_on_secondary_rate_limit(self):
         """Verify GitHubClient._request retries on secondary rate limit 403 before succeeding."""
         import urllib.error
