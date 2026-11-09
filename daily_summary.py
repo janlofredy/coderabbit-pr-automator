@@ -82,9 +82,20 @@ def compute_pr_summary_status(pr: Dict[str, Any]) -> str:
 
     status_badge = str(pr.get("status_badge") or "").upper()
     has_other_changes = bool(pr.get("has_other_changes_requested", False))
+    other_changes = pr.get("other_changes_requested_by") or []
+    has_other_commented = bool(pr.get("has_other_commented", False))
+    other_commented = pr.get("other_commented_by") or []
     user_review_state = str(pr.get("user_review_state") or "").upper()
+    bot_review_outcome = str(pr.get("bot_review_outcome") or "").upper()
 
-    if status_badge in ("COMMENTS_POSTED", "CHANGES_REQUESTED") or has_other_changes or user_review_state == "CHANGES_REQUESTED":
+    # If any reviewer requested changes, bot found issues, or status indicates changes requested: Needs Work
+    if (
+        status_badge in ("COMMENTS_POSTED", "CHANGES_REQUESTED", "OTHER_CHANGES_REQUESTED", "NEEDS_WORK")
+        or has_other_changes
+        or len(other_changes) > 0
+        or user_review_state in ("CHANGES_REQUESTED", "NEEDS_WORK (MINOR ISSUES DETECTED)")
+        or bot_review_outcome in ("CHANGES_REQUESTED", "NEEDS_WORK (MINOR ISSUES DETECTED)")
+    ):
         return "Needs Work"
 
     # If blocked by stack parent, this PR cannot be merged yet
@@ -92,10 +103,14 @@ def compute_pr_summary_status(pr: Dict[str, Any]) -> str:
         return "Needs Work"
 
     ready_to_merge = bool(pr.get("ready_to_merge", False))
-    has_user_auto_approved = bool(pr.get("has_user_auto_approved", False))
-    has_user_manually_approved = bool(pr.get("has_user_manually_approved", False))
 
-    if ready_to_merge or status_badge == "APPROVED_BY_YOU" or has_user_auto_approved or has_user_manually_approved or user_review_state == "APPROVED":
+    # If other reviewers commented and PR is not ready to merge, it needs work/attention
+    if (has_other_commented or len(other_commented) > 0) and not ready_to_merge:
+        return "Needs Work"
+
+    # A PR is ONLY Ready to Merge if the actual overall status meets all merge criteria
+    # (>=2 distinct approvals, checks passing, clean mergeable state, not blocked by stack or change requests)
+    if ready_to_merge:
         return "Ready to Merge"
 
     return "Not Reviewed"
@@ -173,6 +188,12 @@ def generate_daily_summary(
             "stack_block_reason": pr.get("stack_block_reason", ""),
             "report_file": pr.get("report_file", ""),
             "is_own_pr": bool(pr.get("is_own_pr", False)),
+            "has_other_changes_requested": bool(pr.get("has_other_changes_requested", False)),
+            "other_changes_requested_by": pr.get("other_changes_requested_by", []),
+            "has_other_commented": bool(pr.get("has_other_commented", False)),
+            "other_commented_by": pr.get("other_commented_by", []),
+            "other_approved_by": pr.get("other_approved_by", []),
+            "total_approvals": pr.get("total_approvals", 0),
         })
 
     # Discover PRs merged on the day / in the window
@@ -238,6 +259,14 @@ def generate_daily_summary(
             failed = pr.get("failed_checks") or []
             failed_str = f" ({', '.join(failed[:3])})" if failed else ""
             reasons.append(f"CI checks failing{failed_str}")
+        other_changers = pr.get("other_changes_requested_by") or []
+        if pr.get("has_other_changes_requested") or other_changers:
+            changers_str = f" by {', '.join(other_changers)}" if other_changers else ""
+            reasons.append(f"Changes requested{changers_str}")
+        elif pr.get("summary_status") == "Needs Work" and pr.get("is_stack_blocked"):
+            reasons.append(f"Blocked by upstream PR #{pr.get('stack_parent_number')}")
+        elif pr.get("summary_status") == "Needs Work":
+            reasons.append("Review feedback requires attention")
         if pr.get("status_badge") in ("RATE_LIMITED", "ERROR"):
             reasons.append(f"Review issue: {pr.get('status_label')}")
 

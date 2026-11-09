@@ -358,14 +358,14 @@ class DashboardBackend:
                 item["status_badge"] = "REVIEW_FAILED"
                 item["status_label"] = "Review failed"
                 item["status_description"] = str(status_entry.get("error") or "The review could not be completed. Check Details & Logs for diagnostics.")
-            elif status_entry.get("status") == "ALREADY_REVIEWED":
-                item["status_badge"] = "ALREADY_REVIEWED"
-                item["status_label"] = "Already reviewed"
-                item["status_description"] = f"This commit already has an automated review ({status_entry.get('review_state') or 'review submitted'}). A new review will run when the PR head changes or you force a review."
             elif has_other_changes:
                 item["status_badge"] = "OTHER_CHANGES_REQUESTED"
                 item["status_label"] = f"Changes Requested by {changers_str}"
                 item["status_description"] = f"{changers_str} requested changes on this pull request."
+            elif status_entry.get("status") == "ALREADY_REVIEWED":
+                item["status_badge"] = "ALREADY_REVIEWED"
+                item["status_label"] = "Already reviewed"
+                item["status_description"] = f"This commit already has an automated review ({status_entry.get('review_state') or 'review submitted'}). A new review will run when the PR head changes or you force a review."
             elif is_auto_approved:
                 item["status_badge"] = "APPROVED"
                 item["status_label"] = "Auto Approved by You"

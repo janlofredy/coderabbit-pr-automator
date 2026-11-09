@@ -539,15 +539,31 @@ class GitHubClient:
         try:
             reviews = self.get_reviews_for_pr(owner, repo, pr_number)
             latest_by_reviewer: Dict[str, Dict[str, Any]] = {}
+            latest_decisive_by_reviewer: Dict[str, Dict[str, Any]] = {}
+            has_commented_by_reviewer: Dict[str, bool] = {}
+
             for r in reviews:
                 reviewer = ((r.get("user") or {}).get("login") or "").strip()
                 if not reviewer:
                     continue
+                rev_key = reviewer.lower()
+                latest_by_reviewer[rev_key] = r
                 state = (r.get("state") or "").upper()
-                if state in ("APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"):
-                    latest_by_reviewer[reviewer.lower()] = r
+                if state in ("APPROVED", "CHANGES_REQUESTED"):
+                    latest_decisive_by_reviewer[rev_key] = r
+                elif state == "DISMISSED":
+                    latest_decisive_by_reviewer.pop(rev_key, None)
+                elif state == "COMMENTED":
+                    has_commented_by_reviewer[rev_key] = True
 
-            for rev_lower, r in latest_by_reviewer.items():
+            all_reviewers = set(latest_by_reviewer.keys()) | set(latest_decisive_by_reviewer.keys())
+            for rev_lower in all_reviewers:
+                # Prioritize decisive review (APPROVED / CHANGES_REQUESTED) over subsequent advisory COMMENTED
+                if rev_lower in latest_decisive_by_reviewer:
+                    r = latest_decisive_by_reviewer[rev_lower]
+                else:
+                    r = latest_by_reviewer[rev_lower]
+
                 reviewer_login = (r.get("user") or {}).get("login") or rev_lower
                 state = (r.get("state") or "").upper()
                 r_commit = r.get("commit_id", "")
@@ -604,6 +620,14 @@ class GitHubClient:
                         if not is_cr_auto and "coderabbit" not in rev_lower:
                             other_commented.add(reviewer_login)
 
+            # If any reviewer submitted comments but hasn't approved or requested changes, include in other_commented
+            for rev_lower, did_comment in has_commented_by_reviewer.items():
+                if did_comment and rev_lower not in [u.lower() for u in other_approved] and rev_lower not in [u.lower() for u in other_changes_requested]:
+                    if not (user and rev_lower == user) and "coderabbit" not in rev_lower:
+                        r_comm = latest_by_reviewer.get(rev_lower, {})
+                        c_login = (r_comm.get("user") or {}).get("login") or rev_lower
+                        other_commented.add(c_login)
+
         except Exception as e:
             logger.warning("Error inspecting review summary for %s/%s PR #%s: %s", owner, repo, pr_number, e)
 
@@ -638,6 +662,12 @@ class GitHubClient:
         except Exception as e:
             logger.debug("Could not fetch issue comments for PR #%s: %s", pr_number, e)
 
+        # Ensure reviewers who approved or whose changes were requested are not left in other_commented
+        other_commented = {
+            u for u in other_commented
+            if u.lower() not in [a.lower() for a in other_approved]
+            and u.lower() not in [c.lower() for c in other_changes_requested]
+        }
         # If author approved in text, ensure author is listed in approvals and not comments
         if author_text_approved and author_lower:
             other_commented = {u for u in other_commented if u.lower() != author_lower}

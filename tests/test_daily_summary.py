@@ -301,21 +301,38 @@ class TestDailySummaryEngine(unittest.TestCase):
         self.assertEqual(compute_pr_summary_status({"status_badge": "COMMENTS_POSTED"}), "Needs Work")
         self.assertEqual(compute_pr_summary_status({"status_badge": "CHANGES_REQUESTED"}), "Needs Work")
         self.assertEqual(compute_pr_summary_status({"has_other_changes_requested": True}), "Needs Work")
+        self.assertEqual(compute_pr_summary_status({"other_changes_requested_by": ["alice"]}), "Needs Work")
         self.assertEqual(compute_pr_summary_status({"user_review_state": "CHANGES_REQUESTED"}), "Needs Work")
+        self.assertEqual(compute_pr_summary_status({"bot_review_outcome": "NEEDS_WORK (Minor Issues Detected)"}), "Needs Work")
+        self.assertEqual(compute_pr_summary_status({"is_stack_blocked": True}), "Needs Work")
+        # Other reviewer requested changes even if bot auto-approved
+        self.assertEqual(
+            compute_pr_summary_status({"has_user_auto_approved": True, "has_other_changes_requested": True, "ready_to_merge": False}),
+            "Needs Work"
+        )
+        self.assertEqual(
+            compute_pr_summary_status({"has_user_auto_approved": True, "other_changes_requested_by": ["alice"], "ready_to_merge": False}),
+            "Needs Work"
+        )
+        # Other reviewer left comments and PR is not ready to merge
+        self.assertEqual(
+            compute_pr_summary_status({"has_user_auto_approved": True, "other_commented_by": ["bob"], "ready_to_merge": False}),
+            "Needs Work"
+        )
 
-        # 4. Ready to Merge
+        # 4. Ready to Merge - ONLY when ready_to_merge is True
         self.assertEqual(compute_pr_summary_status({"ready_to_merge": True}), "Ready to Merge")
-        self.assertEqual(compute_pr_summary_status({"status_badge": "APPROVED_BY_YOU"}), "Ready to Merge")
-        self.assertEqual(compute_pr_summary_status({"has_user_auto_approved": True}), "Ready to Merge")
-        self.assertEqual(compute_pr_summary_status({"has_user_manually_approved": True}), "Ready to Merge")
-        self.assertEqual(compute_pr_summary_status({"user_review_state": "APPROVED"}), "Ready to Merge")
+        self.assertEqual(compute_pr_summary_status({"ready_to_merge": True, "status_badge": "APPROVED_BY_YOU"}), "Ready to Merge")
 
-        # 5. Not Reviewed
+        # 5. Not Reviewed - bot approved alone is not enough if PR is not ready to merge
         self.assertEqual(compute_pr_summary_status({}), "Not Reviewed")
         self.assertEqual(compute_pr_summary_status({"status_badge": "PENDING_REVIEW"}), "Not Reviewed")
         self.assertEqual(compute_pr_summary_status({"status_badge": "RATE_LIMITED"}), "Not Reviewed")
         self.assertEqual(compute_pr_summary_status({"status_badge": "IN_PROGRESS"}), "Not Reviewed")
         self.assertEqual(compute_pr_summary_status({"status_badge": "OWN_PR"}), "Not Reviewed")
+        self.assertEqual(compute_pr_summary_status({"has_user_auto_approved": True, "ready_to_merge": False}), "Not Reviewed")
+        self.assertEqual(compute_pr_summary_status({"has_user_manually_approved": True, "ready_to_merge": False}), "Not Reviewed")
+        self.assertEqual(compute_pr_summary_status({"status_badge": "APPROVED_BY_YOU", "ready_to_merge": False}), "Not Reviewed")
 
     def test_format_markdown_summary_by_group(self):
         sample_data = {
@@ -573,6 +590,67 @@ class TestDailySummaryEngine(unittest.TestCase):
         finally:
             backend.stop()
             web_dashboard.backend = None
+
+    def test_github_client_review_decisive_state_preserved_after_comment(self):
+        """Verify that when a reviewer requests changes and later comments, CHANGES_REQUESTED is preserved."""
+        client = GitHubClient(token="fake-token")
+        client.get_reviews_for_pr = MagicMock(return_value=[
+            {
+                "id": 101,
+                "user": {"login": "senior_dev"},
+                "state": "CHANGES_REQUESTED",
+                "body": "Please address edge case and add tests.",
+                "commit_id": "sha123"
+            },
+            {
+                "id": 102,
+                "user": {"login": "senior_dev"},
+                "state": "COMMENTED",
+                "body": "Here is an example snippet.",
+                "commit_id": "sha123"
+            }
+        ])
+        client.get_comments_for_pr = MagicMock(return_value=[])
+        client.get_check_runs_summary = MagicMock(return_value={"has_check_error": False, "failed_checks": [], "checks_status": "PASSED"})
+        client.get_pr_mergeable_status = MagicMock(return_value={"has_conflict": False, "mergeable_state": "clean"})
+
+        summary = client.get_pr_review_summary("owner", "repo", 42, commit_sha="sha123", auth_user="bot_user")
+        self.assertTrue(summary["has_other_changes_requested"])
+        self.assertIn("senior_dev", summary["other_changes_requested_by"])
+
+    def test_needs_attention_surfaces_other_reviewer_changes(self):
+        """Verify that open PRs with other reviewer changes requested are flagged in needs_attention."""
+        annotated_status = {
+            "repositories": [{"full_name": "owner/repo", "enabled": True}],
+            "pull_requests": [
+                {
+                    "pr_key": "owner/repo#42",
+                    "repo": "owner/repo",
+                    "number": 42,
+                    "title": "Core Feature",
+                    "author": "dev1",
+                    "html_url": "https://github.com/owner/repo/pull/42",
+                    "created_at": "2026-11-09T10:00:00Z",
+                    "updated_at": "2026-11-09T12:00:00Z",
+                    "status_badge": "APPROVED_BY_YOU",
+                    "has_user_auto_approved": True,
+                    "has_other_changes_requested": True,
+                    "other_changes_requested_by": ["senior_dev"],
+                    "ready_to_merge": False,
+                }
+            ]
+        }
+        self.gh_client.list_recently_merged_prs.return_value = []
+        summary = generate_daily_summary(
+            annotated_status=annotated_status,
+            github_client=self.gh_client,
+            state_manager=self.state_mgr,
+            hours=24
+        )
+        self.assertEqual(len(summary["needs_attention"]), 1)
+        item = summary["needs_attention"][0]
+        self.assertEqual(item["summary_status"], "Needs Work")
+        self.assertTrue(any("senior_dev" in r for r in item["reasons"]))
 
 
 if __name__ == "__main__":
