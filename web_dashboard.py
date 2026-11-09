@@ -483,6 +483,7 @@ class DashboardBackend:
             "service_enabled": config.get("service_enabled", True),
             "strict_approval": config.get("strict_approval", True),
             "last_run": state.get("last_run_timestamp", ""),
+            "total_reviews_count": self.state_manager.get_total_reviews_count(),
             "rate_limited": is_rate_limited,
             "rate_limit_expires_at": state.get("rate_limit_expires_at", 0),
             "rate_limit_remaining_seconds": remaining,
@@ -808,6 +809,44 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             }).encode("utf-8"))
             return
 
+        if path == "/api/review-history":
+            query_params = parse_qs(parsed.query)
+            limit = None
+            if "limit" in query_params:
+                try:
+                    limit = int(query_params["limit"][0])
+                except (ValueError, TypeError):
+                    limit = None
+            offset = 0
+            if "offset" in query_params:
+                try:
+                    offset = max(0, int(query_params["offset"][0]))
+                except (ValueError, TypeError):
+                    offset = 0
+
+            sort_order = query_params.get("sort_order", query_params.get("sort", ["desc"]))[0].strip() or "desc"
+            sort_by = query_params.get("sort_by", ["time"])[0].strip() or "time"
+            outcome = query_params.get("outcome", [None])[0]
+            repo = query_params.get("repo", [None])[0]
+            account_id = query_params.get("account_id", [None])[0]
+            search = query_params.get("search", query_params.get("q", [None]))[0]
+            time_range = query_params.get("time_range", [None])[0]
+
+            history_data = backend.state_manager.get_all_review_history(
+                limit=limit,
+                offset=offset,
+                sort_order=sort_order,
+                sort_by=sort_by,
+                outcome=outcome,
+                repo=repo,
+                account_id=account_id,
+                search=search,
+                time_range=time_range
+            )
+            self._set_headers(200)
+            self.wfile.write(json.dumps(history_data).encode("utf-8"))
+            return
+
 
         if path == "/api/repos":
             repos = backend.repository_service.get_repositories()
@@ -1077,6 +1116,18 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             backend.state_manager.clear_account_logs(acc_id)
             self._set_headers(200)
             self.wfile.write(json.dumps({"status": "history_cleared", "id": acc_id}).encode("utf-8"))
+            return
+
+        if path == "/api/review-history/clear":
+            log_id = data.get("log_id") or data.get("id")
+            if log_id:
+                deleted = backend.state_manager.delete_review_history_entry(log_id)
+                self._set_headers(200 if deleted else 404)
+                self.wfile.write(json.dumps({"status": "deleted" if deleted else "not_found", "log_id": log_id}).encode("utf-8"))
+            else:
+                cleared_count = backend.state_manager.clear_all_review_history()
+                self._set_headers(200)
+                self.wfile.write(json.dumps({"status": "all_cleared", "count": cleared_count}).encode("utf-8"))
             return
 
         if path == "/api/daily-summary/snapshot":

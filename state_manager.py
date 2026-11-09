@@ -37,7 +37,9 @@ class StateManager:
             "account_rate_limits": {},
             "last_account_index": -1,
             "account_logs": {},
-            "daily_snapshots": []
+            "daily_snapshots": [],
+            "review_history": [],
+            "pr_logs": {}
         }
 
     def ensure_state_exists(self) -> None:
@@ -347,23 +349,39 @@ class StateManager:
         Appends an execution log record for a pull request to the persistent history.
         Returns: the log_id generated for this entry.
         """
-        state = self.load_state()
-        pr_logs = state.get("pr_logs", {})
-        if pr_key not in pr_logs:
-            pr_logs[pr_key] = []
+        with self._lock:
+            state = self.load_state()
+            pr_logs = state.get("pr_logs", {})
+            if pr_key not in pr_logs:
+                pr_logs[pr_key] = []
 
-        now = datetime.now(timezone.utc)
-        log_id = log_entry.get("log_id") or f"{int(now.timestamp() * 1000000)}_{pr_key.replace('/', '_').replace('#', '_')}"
-        log_entry["log_id"] = log_id
-        if "timestamp" not in log_entry:
-            log_entry["timestamp"] = now.isoformat()
+            now = datetime.now(timezone.utc)
+            log_id = log_entry.get("log_id") or f"{int(now.timestamp() * 1000000)}_{pr_key.replace('/', '_').replace('#', '_')}"
+            log_entry["log_id"] = log_id
+            if "timestamp" not in log_entry:
+                log_entry["timestamp"] = now.isoformat()
+            if "pr_key" not in log_entry:
+                log_entry["pr_key"] = pr_key
 
-        pr_logs[pr_key].insert(0, log_entry)
-        pr_logs[pr_key] = pr_logs[pr_key][:max_history]
+            pr_logs[pr_key].insert(0, log_entry)
+            pr_logs[pr_key] = pr_logs[pr_key][:max_history]
 
-        state["pr_logs"] = pr_logs
-        self.save_state(state)
-        return log_id
+            state["pr_logs"] = pr_logs
+
+            # Also maintain global chronological review history
+            review_history = state.get("review_history", [])
+            if not isinstance(review_history, list):
+                review_history = []
+            existing_idx = next((i for i, item in enumerate(review_history) if item.get("log_id") == log_id), None)
+            entry_copy = dict(log_entry)
+            if existing_idx is not None:
+                review_history[existing_idx] = entry_copy
+            else:
+                review_history.insert(0, entry_copy)
+            state["review_history"] = review_history[:500]
+
+            self.save_state(state)
+            return log_id
 
     def get_pr_logs(self, pr_key: str) -> list:
         """Retrieves list of recorded review logs for a PR (most recent first)."""
@@ -384,25 +402,42 @@ class StateManager:
         Returns: the log_id generated for this entry.
         """
         acc_id = str(account_id or "default")
-        state = self.load_state()
-        account_logs = state.get("account_logs", {})
-        if acc_id not in account_logs or not isinstance(account_logs[acc_id], list):
-            account_logs[acc_id] = []
+        with self._lock:
+            state = self.load_state()
+            account_logs = state.get("account_logs", {})
+            if acc_id not in account_logs or not isinstance(account_logs[acc_id], list):
+                account_logs[acc_id] = []
 
-        now = datetime.now(timezone.utc)
-        log_id = log_entry.get("log_id") or f"{int(now.timestamp() * 1000000)}_acc_{acc_id}"
-        entry = dict(log_entry)
-        entry["log_id"] = log_id
-        if "timestamp" not in entry:
-            entry["timestamp"] = now.isoformat()
-        entry["account_id"] = acc_id
+            now = datetime.now(timezone.utc)
+            log_id = log_entry.get("log_id") or f"{int(now.timestamp() * 1000000)}_acc_{acc_id}"
+            entry = dict(log_entry)
+            entry["log_id"] = log_id
+            if "timestamp" not in entry:
+                entry["timestamp"] = now.isoformat()
+            entry["account_id"] = acc_id
 
-        account_logs[acc_id].insert(0, entry)
-        account_logs[acc_id] = account_logs[acc_id][:max_history]
+            account_logs[acc_id].insert(0, entry)
+            account_logs[acc_id] = account_logs[acc_id][:max_history]
 
-        state["account_logs"] = account_logs
-        self.save_state(state)
-        return log_id
+            state["account_logs"] = account_logs
+
+            # Update account info in review_history if already present
+            review_history = state.get("review_history", [])
+            if isinstance(review_history, list):
+                found = False
+                for item in review_history:
+                    if item.get("log_id") == log_id:
+                        item["account_id"] = acc_id
+                        if "coderabbit_account" in entry:
+                            item["coderabbit_account"] = entry["coderabbit_account"]
+                        found = True
+                        break
+                if not found:
+                    review_history.insert(0, dict(entry))
+                    state["review_history"] = review_history[:500]
+
+            self.save_state(state)
+            return log_id
 
     def get_account_logs(self, account_id: str) -> list:
         """
@@ -725,4 +760,342 @@ class StateManager:
 
             recent.sort(key=lambda x: str(x.get("timestamp", "")), reverse=True)
             return recent
+
+    def get_total_reviews_count(self) -> int:
+        """Returns the total number of recorded review executions across all history."""
+        with self._lock:
+            state = self.load_state()
+            seen_ids = set()
+            count = 0
+            for entry in state.get("review_history", []):
+                if isinstance(entry, dict):
+                    log_id = entry.get("log_id")
+                    if log_id:
+                        seen_ids.add(log_id)
+                    count += 1
+            for pr_key, logs in state.get("pr_logs", {}).items():
+                if isinstance(logs, list):
+                    for entry in logs:
+                        if isinstance(entry, dict):
+                            log_id = entry.get("log_id")
+                            if log_id and log_id in seen_ids:
+                                continue
+                            if log_id:
+                                seen_ids.add(log_id)
+                            count += 1
+            for acc_id, logs in state.get("account_logs", {}).items():
+                if isinstance(logs, list):
+                    for entry in logs:
+                        if isinstance(entry, dict):
+                            log_id = entry.get("log_id")
+                            if log_id and log_id in seen_ids:
+                                continue
+                            if log_id:
+                                seen_ids.add(log_id)
+                            count += 1
+            return count
+
+    def get_all_review_history(
+        self,
+        limit: Optional[int] = None,
+        offset: int = 0,
+        sort_order: str = "desc",
+        sort_by: str = "time",
+        outcome: Optional[str] = None,
+        repo: Optional[str] = None,
+        account_id: Optional[str] = None,
+        search: Optional[str] = None,
+        time_range: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Retrieves all review executions across pull requests and accounts,
+        ordered chronologically by execution time (or elapsed duration).
+        Supports filtering by outcome, repository, account, search keywords, and time range.
+        Returns entries with computed metrics and unique filter sets.
+        """
+        with self._lock:
+            state = self.load_state()
+            now = datetime.now(timezone.utc)
+            all_entries = []
+            seen_ids = set()
+
+            # 1. From review_history list
+            for entry in state.get("review_history", []):
+                if not isinstance(entry, dict):
+                    continue
+                log_id = entry.get("log_id")
+                if log_id:
+                    seen_ids.add(log_id)
+                all_entries.append(dict(entry))
+
+            # 2. From pr_logs dict
+            pr_logs = state.get("pr_logs", {})
+            if isinstance(pr_logs, dict):
+                for pr_key, logs in pr_logs.items():
+                    if not isinstance(logs, list):
+                        continue
+                    for entry in logs:
+                        if not isinstance(entry, dict):
+                            continue
+                        log_id = entry.get("log_id")
+                        if log_id and log_id in seen_ids:
+                            continue
+                        item = dict(entry)
+                        if "pr_key" not in item:
+                            item["pr_key"] = pr_key
+                        if log_id:
+                            seen_ids.add(log_id)
+                        all_entries.append(item)
+
+            # 3. From account_logs dict
+            account_logs = state.get("account_logs", {})
+            if isinstance(account_logs, dict):
+                for acc_id, logs in account_logs.items():
+                    if not isinstance(logs, list):
+                        continue
+                    for entry in logs:
+                        if not isinstance(entry, dict):
+                            continue
+                        log_id = entry.get("log_id")
+                        if log_id and log_id in seen_ids:
+                            continue
+                        item = dict(entry)
+                        item.setdefault("account_id", acc_id)
+                        if log_id:
+                            seen_ids.add(log_id)
+                        all_entries.append(item)
+
+            # Normalization
+            normalized_entries = []
+            for item in all_entries:
+                pr_key = str(item.get("pr_key") or "")
+                repo_val = item.get("repo")
+                pr_num_val = item.get("pr_number")
+
+                if "#" in pr_key:
+                    parts = pr_key.split("#", 1)
+                    if not repo_val:
+                        repo_val = parts[0]
+                    if not pr_num_val:
+                        try:
+                            pr_num_val = int(parts[1])
+                        except ValueError:
+                            pr_num_val = parts[1]
+
+                item["pr_key"] = pr_key
+                item["repo"] = repo_val or ""
+                item["pr_number"] = pr_num_val or 0
+
+                raw_outcome = (item.get("review_outcome") or item.get("status") or item.get("event") or "UNKNOWN").upper()
+                item["review_outcome"] = raw_outcome
+
+                ts_str = item.get("timestamp") or ""
+                item["timestamp"] = ts_str
+
+                normalized_entries.append(item)
+
+            # Metrics
+            total_reviews = len(normalized_entries)
+            approved = 0
+            commented = 0
+            errors = 0
+            rate_limited = 0
+            durations = []
+            unique_prs = set()
+            unique_repos = set()
+            accounts_map = {}
+
+            for entry in normalized_entries:
+                out = (entry.get("review_outcome") or "").upper()
+                if "APPROV" in out:
+                    approved += 1
+                elif "COMMENT" in out:
+                    commented += 1
+                elif "ERROR" in out or entry.get("status") == "ERROR":
+                    errors += 1
+                elif "RATE_LIMIT" in out or entry.get("status") == "RATE_LIMITED":
+                    rate_limited += 1
+
+                dur = entry.get("elapsed_seconds")
+                if dur is not None:
+                    try:
+                        durations.append(float(dur))
+                    except (ValueError, TypeError):
+                        pass
+
+                if entry.get("pr_key"):
+                    unique_prs.add(entry["pr_key"])
+                if entry.get("repo"):
+                    unique_repos.add(entry["repo"])
+
+                acc_id = entry.get("account_id") or "default"
+                acc_name = entry.get("coderabbit_account") or acc_id
+                accounts_map[acc_id] = acc_name
+
+            avg_dur = round(sum(durations) / len(durations), 1) if durations else 0.0
+
+            overall_metrics = {
+                "total_reviews": total_reviews,
+                "approved_count": approved,
+                "commented_count": commented,
+                "error_count": errors,
+                "rate_limited_count": rate_limited,
+                "avg_duration_seconds": avg_dur,
+                "unique_prs_count": len(unique_prs),
+                "unique_repos_count": len(unique_repos),
+            }
+
+            filtered = normalized_entries
+
+            # Time range filter (24h, 7d, 30d)
+            if time_range and time_range.lower() != "all":
+                cutoff_hours = None
+                tr = time_range.lower()
+                if tr in ("24h", "today", "1d"):
+                    cutoff_hours = 24
+                elif tr in ("7d", "week"):
+                    cutoff_hours = 7 * 24
+                elif tr in ("30d", "month"):
+                    cutoff_hours = 30 * 24
+
+                if cutoff_hours is not None:
+                    cutoff_sec = cutoff_hours * 3600
+                    time_filtered = []
+                    for e in filtered:
+                        ts_str = e.get("timestamp")
+                        if not ts_str:
+                            continue
+                        try:
+                            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                            if ts.tzinfo is None:
+                                ts = ts.replace(tzinfo=timezone.utc)
+                            delta = (now - ts).total_seconds()
+                            if 0 <= delta <= cutoff_sec:
+                                time_filtered.append(e)
+                        except Exception:
+                            pass
+                    filtered = time_filtered
+
+            # Outcome filter
+            if outcome and outcome.upper() != "ALL":
+                target_outcome = outcome.upper()
+                filtered = [
+                    e for e in filtered
+                    if target_outcome in (e.get("review_outcome") or "").upper()
+                    or (target_outcome == "ERROR" and e.get("status") == "ERROR")
+                    or (target_outcome == "RATE_LIMITED" and ("RATE_LIMIT" in (e.get("review_outcome") or "").upper() or e.get("status") == "RATE_LIMITED"))
+                ]
+
+            # Repo filter
+            if repo and repo.upper() != "ALL":
+                rep_lower = repo.lower()
+                filtered = [
+                    e for e in filtered
+                    if e.get("repo", "").lower() == rep_lower
+                    or e.get("pr_key", "").lower().startswith(rep_lower + "#")
+                ]
+
+            # Account filter
+            if account_id and account_id.upper() != "ALL":
+                filtered = [
+                    e for e in filtered
+                    if str(e.get("account_id", "")).lower() == account_id.lower()
+                    or str(e.get("coderabbit_account", "")).lower() == account_id.lower()
+                ]
+
+            # Search query filter
+            if search and search.strip():
+                query = search.strip().lower()
+                filtered = [
+                    e for e in filtered
+                    if query in str(e.get("pr_key", "")).lower()
+                    or query in str(e.get("title", "")).lower()
+                    or query in str(e.get("author", "")).lower()
+                    or query in str(e.get("repo", "")).lower()
+                    or query in str(e.get("coderabbit_account", "")).lower()
+                    or query in str(e.get("summary", "")).lower()
+                    or query in str(e.get("error", "")).lower()
+                ]
+
+            # Sorting
+            reverse_order = (sort_order.lower() != "asc" and sort_order.lower() != "time_asc" and sort_order.lower() != "dur_asc")
+            if sort_by in ("duration", "dur_desc", "dur_asc") or sort_order in ("dur_desc", "dur_asc"):
+                dur_reverse = False if (sort_by == "dur_asc" or sort_order == "dur_asc") else True
+                filtered.sort(key=lambda x: float(x.get("elapsed_seconds") or 0.0), reverse=dur_reverse)
+            else:
+                def _get_sort_time(entry: Dict[str, Any]) -> float:
+                    ts_str = entry.get("timestamp") or ""
+                    try:
+                        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                        return ts.timestamp()
+                    except Exception:
+                        return 0.0
+
+                time_reverse = False if sort_order in ("time_asc", "asc") else True
+                filtered.sort(key=_get_sort_time, reverse=time_reverse)
+
+            filtered_count = len(filtered)
+            if offset > 0:
+                filtered = filtered[offset:]
+            if limit is not None and limit > 0:
+                filtered = filtered[:limit]
+
+            repositories_list = sorted(list(unique_repos))
+            accounts_list = [{"id": k, "name": v} for k, v in sorted(accounts_map.items())]
+
+            return {
+                "total": total_reviews,
+                "filtered_count": filtered_count,
+                "metrics": overall_metrics,
+                "repositories": repositories_list,
+                "accounts": accounts_list,
+                "history": filtered,
+                "sort_order": sort_order,
+                "sort_by": sort_by,
+            }
+
+    def clear_all_review_history(self) -> int:
+        """Clears all review history entries across all stores."""
+        with self._lock:
+            state = self.load_state()
+            count = len(state.get("review_history", []))
+            state["review_history"] = []
+            state["pr_logs"] = {}
+            state["account_logs"] = {}
+            self.save_state(state)
+            return count
+
+    def delete_review_history_entry(self, log_id: str) -> bool:
+        """Deletes a single review history entry by its log_id."""
+        if not log_id:
+            return False
+        with self._lock:
+            state = self.load_state()
+            modified = False
+
+            if "review_history" in state and isinstance(state["review_history"], list):
+                prev_len = len(state["review_history"])
+                state["review_history"] = [e for e in state["review_history"] if e.get("log_id") != log_id]
+                if len(state["review_history"]) != prev_len:
+                    modified = True
+
+            if "pr_logs" in state and isinstance(state["pr_logs"], dict):
+                for k, logs in state["pr_logs"].items():
+                    if isinstance(logs, list):
+                        prev_len = len(logs)
+                        state["pr_logs"][k] = [e for e in logs if e.get("log_id") != log_id]
+                        if len(state["pr_logs"][k]) != prev_len:
+                            modified = True
+
+            if "account_logs" in state and isinstance(state["account_logs"], dict):
+                for k, logs in state["account_logs"].items():
+                    if isinstance(logs, list):
+                        prev_len = len(logs)
+                        state["account_logs"][k] = [e for e in logs if e.get("log_id") != log_id]
+                        if len(state["account_logs"][k]) != prev_len:
+                            modified = True
+
+            if modified:
+                self.save_state(state)
+            return modified
 
