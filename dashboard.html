@@ -3059,6 +3059,20 @@
             }
         }
 
+        function renderPrSummaryStatusBadge(status) {
+            if (status === 'Ready to Merge') {
+                return '<span class="badge badge-green" style="font-size: 0.72rem; font-weight: 600;">✅ Ready to Merge</span>';
+            } else if (status === 'Needs Work') {
+                return '<span class="badge badge-yellow" style="font-size: 0.72rem; font-weight: 600;">💬 Needs Work</span>';
+            } else if (status === 'CI Failed') {
+                return '<span class="badge badge-red" style="font-size: 0.72rem; font-weight: 600;">❌ CI Failed</span>';
+            } else if (status === 'Merge Conflict') {
+                return '<span class="badge badge-red" style="font-size: 0.72rem; font-weight: 600;">⚠️ Merge Conflict</span>';
+            } else {
+                return '<span class="badge badge-gray" style="font-size: 0.72rem; font-weight: 600;">⏳ Not Reviewed</span>';
+            }
+        }
+
         function renderDailySummary(data) {
             const container = document.getElementById('daily-summary-content');
             if (!container || !data) return;
@@ -3072,10 +3086,30 @@
 
             // 1. KPI Metrics Grid
             const metricsHtml = `
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.65rem;">
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 0.65rem;">
                     <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.75rem; text-align: center;">
                         <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; font-weight: 600;">Total Open PRs</div>
                         <div style="font-size: 1.5rem; font-weight: 700; color: #f8fafc; margin-top: 0.2rem;">${metrics.total_open_prs || 0}</div>
+                    </div>
+                    <div style="background: rgba(34, 197, 94, 0.08); border: 1px solid rgba(34, 197, 94, 0.25); border-radius: 8px; padding: 0.75rem; text-align: center;">
+                        <div style="font-size: 0.72rem; color: #86efac; text-transform: uppercase; font-weight: 600;">Ready to Merge</div>
+                        <div style="font-size: 1.5rem; font-weight: 700; color: #4ade80; margin-top: 0.2rem;">${metrics.ready_to_merge_count || 0}</div>
+                    </div>
+                    <div style="background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.25); border-radius: 8px; padding: 0.75rem; text-align: center;">
+                        <div style="font-size: 0.72rem; color: #fcd34d; text-transform: uppercase; font-weight: 600;">Needs Work</div>
+                        <div style="font-size: 1.5rem; font-weight: 700; color: #fbbf24; margin-top: 0.2rem;">${metrics.needs_work_count || 0}</div>
+                    </div>
+                    <div style="background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.25); border-radius: 8px; padding: 0.75rem; text-align: center;">
+                        <div style="font-size: 0.72rem; color: #fca5a5; text-transform: uppercase; font-weight: 600;">CI Failed</div>
+                        <div style="font-size: 1.5rem; font-weight: 700; color: #f87171; margin-top: 0.2rem;">${metrics.ci_failed_count || 0}</div>
+                    </div>
+                    <div style="background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.25); border-radius: 8px; padding: 0.75rem; text-align: center;">
+                        <div style="font-size: 0.72rem; color: #fca5a5; text-transform: uppercase; font-weight: 600;">Merge Conflict</div>
+                        <div style="font-size: 1.5rem; font-weight: 700; color: #f87171; margin-top: 0.2rem;">${metrics.conflict_count || 0}</div>
+                    </div>
+                    <div style="background: rgba(148, 163, 184, 0.08); border: 1px solid rgba(148, 163, 184, 0.25); border-radius: 8px; padding: 0.75rem; text-align: center;">
+                        <div style="font-size: 0.72rem; color: #94a3b8; text-transform: uppercase; font-weight: 600;">Not Reviewed</div>
+                        <div style="font-size: 1.5rem; font-weight: 700; color: #cbd5e1; margin-top: 0.2rem;">${metrics.not_reviewed_count || 0}</div>
                     </div>
                     <div style="background: rgba(168, 85, 247, 0.08); border: 1px solid rgba(168, 85, 247, 0.25); border-radius: 8px; padding: 0.75rem; text-align: center;">
                         <div style="font-size: 0.72rem; color: #c084fc; text-transform: uppercase; font-weight: 600;">Merged Today</div>
@@ -3085,18 +3119,6 @@
                         <div style="font-size: 0.72rem; color: #7dd3fc; text-transform: uppercase; font-weight: 600;">Reviews (24h)</div>
                         <div style="font-size: 1.5rem; font-weight: 700; color: #38bdf8; margin-top: 0.2rem;">${metrics.reviews_completed_24h || 0}</div>
                     </div>
-                    <div style="background: ${metrics.needs_attention_count > 0 ? 'rgba(239, 68, 68, 0.12)' : 'rgba(255,255,255,0.03)'}; border: 1px solid ${metrics.needs_attention_count > 0 ? 'rgba(239, 68, 68, 0.35)' : 'var(--border-color)'}; border-radius: 8px; padding: 0.75rem; text-align: center;">
-                        <div style="font-size: 0.72rem; color: ${metrics.needs_attention_count > 0 ? '#fca5a5' : 'var(--text-muted)'}; text-transform: uppercase; font-weight: 600;">Needs Attention</div>
-                        <div style="font-size: 1.5rem; font-weight: 700; color: ${metrics.needs_attention_count > 0 ? '#f87171' : '#f8fafc'}; margin-top: 0.2rem;">${metrics.needs_attention_count || 0}</div>
-                    </div>
-                    <div style="background: rgba(34, 197, 94, 0.08); border: 1px solid rgba(34, 197, 94, 0.25); border-radius: 8px; padding: 0.75rem; text-align: center;">
-                        <div style="font-size: 0.72rem; color: #86efac; text-transform: uppercase; font-weight: 600;">Ready to Merge</div>
-                        <div style="font-size: 1.5rem; font-weight: 700; color: #4ade80; margin-top: 0.2rem;">${metrics.ready_to_merge_count || 0}</div>
-                    </div>
-                    <div style="background: rgba(99, 102, 241, 0.08); border: 1px solid rgba(99, 102, 241, 0.25); border-radius: 8px; padding: 0.75rem; text-align: center;">
-                        <div style="font-size: 0.72rem; color: #a5b4fc; text-transform: uppercase; font-weight: 600;">Auto-Approved</div>
-                        <div style="font-size: 1.5rem; font-weight: 700; color: #818cf8; margin-top: 0.2rem;">${metrics.auto_approved_count || 0}</div>
-                    </div>
                 </div>
             `;
 
@@ -3105,8 +3127,13 @@
             if (attention && attention.length > 0) {
                 attentionHtml = `
                     <div style="background: rgba(239, 68, 68, 0.05); border: 1px solid rgba(239, 68, 68, 0.25); border-radius: 8px; padding: 0.85rem 1rem;">
-                        <div style="font-size: 0.95rem; font-weight: 600; color: #f87171; display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.65rem;">
-                            <span>⚠️</span> Action Required (${attention.length})
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.65rem;">
+                            <div style="font-size: 0.95rem; font-weight: 600; color: #f87171; display: flex; align-items: center; gap: 0.4rem;">
+                                <span>⚠️</span> Action Required (${attention.length})
+                            </div>
+                            <button class="btn btn-secondary btn-sm" onclick="copyDailySummaryGroupMarkdown('attention', this)" style="padding: 0.2rem 0.55rem; font-size: 0.72rem; display: inline-flex; align-items: center; gap: 0.25rem;">
+                                <span>📋</span> Copy Markdown
+                            </button>
                         </div>
                         <div style="display: flex; flex-direction: column; gap: 0.5rem;">
                             ${attention.map(item => `
@@ -3138,6 +3165,9 @@
                         <div style="font-size: 1rem; font-weight: 600; display: flex; align-items: center; gap: 0.4rem;">
                             <span>📂</span> All Open Pull Requests (${openPrs.length})
                         </div>
+                        <button class="btn btn-secondary btn-sm" onclick="copyDailySummaryGroupMarkdown('open_prs', this)" style="padding: 0.2rem 0.55rem; font-size: 0.72rem; display: inline-flex; align-items: center; gap: 0.25rem;">
+                            <span>📋</span> Copy Markdown
+                        </button>
                     </div>
             `;
             if (openPrs.length === 0) {
@@ -3154,26 +3184,11 @@
                                     <th style="padding: 0.5rem 0.6rem;">Created</th>
                                     <th style="padding: 0.5rem 0.6rem;">Last Updated</th>
                                     <th style="padding: 0.5rem 0.6rem;">Status</th>
-                                    <th style="padding: 0.5rem 0.6rem;">Health</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 ${openPrs.map(p => {
-                                    let badgeClass = 'badge-gray';
-                                    if (p.status_badge === 'APPROVED_BY_YOU') badgeClass = 'badge-green';
-                                    else if (p.status_badge === 'COMMENTS_POSTED') badgeClass = 'badge-yellow';
-                                    else if (p.status_badge === 'RATE_LIMITED') badgeClass = 'badge-orange';
-                                    else if (p.status_badge === 'IN_PROGRESS') badgeClass = 'badge-blue';
-                                    else if (p.status_badge === 'SKIPPED_MAX_FILES') badgeClass = 'badge-red';
-                                    else if (p.status_badge === 'OWN_PR') badgeClass = 'badge-purple';
-
-                                    const healthBadges = [];
-                                    if (p.has_conflict) healthBadges.push('<span class="badge badge-red" style="font-size: 0.68rem;">Conflict</span>');
-                                    else if (p.ready_to_merge) healthBadges.push('<span class="badge badge-green" style="font-size: 0.68rem;">Ready</span>');
-
-                                    if (p.has_check_error) healthBadges.push('<span class="badge badge-red" style="font-size: 0.68rem;">CI Fail</span>');
-                                    else if (p.checks_status === 'PASSED') healthBadges.push('<span class="badge badge-green" style="font-size: 0.68rem;">CI Pass</span>');
-
+                                    const statusVal = p.summary_status || p.status || 'Not Reviewed';
                                     return `
                                         <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
                                             <td style="padding: 0.55rem 0.6rem; max-width: 280px;">
@@ -3194,12 +3209,7 @@
                                                 <div style="color: var(--text-muted); font-size: 0.7rem;">${escapeHtml(p.updated_at_friendly || '')}</div>
                                             </td>
                                             <td style="padding: 0.55rem 0.6rem;">
-                                                <span class="badge ${badgeClass}" style="font-size: 0.7rem;">${escapeHtml(p.status_label || p.status_badge)}</span>
-                                            </td>
-                                            <td style="padding: 0.55rem 0.6rem;">
-                                                <div style="display: flex; gap: 0.25rem; flex-wrap: wrap;">
-                                                    ${healthBadges.join('') || '<span style="color: var(--text-muted); font-size: 0.72rem;">—</span>'}
-                                                </div>
+                                                ${renderPrSummaryStatusBadge(statusVal)}
                                             </td>
                                         </tr>
                                     `;
@@ -3218,6 +3228,9 @@
                         <div style="font-size: 1rem; font-weight: 600; display: flex; align-items: center; gap: 0.4rem;">
                             <span>🟣</span> Merged Pull Requests Today (${mergedPrs.length})
                         </div>
+                        <button class="btn btn-secondary btn-sm" onclick="copyDailySummaryGroupMarkdown('merged', this)" style="padding: 0.2rem 0.55rem; font-size: 0.72rem; display: inline-flex; align-items: center; gap: 0.25rem;">
+                            <span>📋</span> Copy Markdown
+                        </button>
                     </div>
             `;
             if (mergedPrs.length === 0) {
@@ -3273,8 +3286,13 @@
             if (reviews && reviews.length > 0) {
                 reviewsHtml = `
                     <div style="background: var(--card-bg, #111827); border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem;">
-                        <div style="font-size: 1rem; font-weight: 600; display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.75rem;">
-                            <span>⚡</span> 24-Hour Review Activity (${reviews.length})
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                            <div style="font-size: 1rem; font-weight: 600; display: flex; align-items: center; gap: 0.4rem;">
+                                <span>⚡</span> 24-Hour Review Activity (${reviews.length})
+                            </div>
+                            <button class="btn btn-secondary btn-sm" onclick="copyDailySummaryGroupMarkdown('reviews', this)" style="padding: 0.2rem 0.55rem; font-size: 0.72rem; display: inline-flex; align-items: center; gap: 0.25rem;">
+                                <span>📋</span> Copy Markdown
+                            </button>
                         </div>
                         <div style="overflow-x: auto;">
                             <table style="width: 100%; border-collapse: collapse; font-size: 0.83rem; text-align: left;">
@@ -3321,8 +3339,13 @@
             if (repos && repos.length > 0) {
                 reposHtml = `
                     <div style="background: var(--card-bg, #111827); border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem;">
-                        <div style="font-size: 1rem; font-weight: 600; display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.75rem;">
-                            <span>📁</span> Repositories Breakdown
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                            <div style="font-size: 1rem; font-weight: 600; display: flex; align-items: center; gap: 0.4rem;">
+                                <span>📁</span> Repositories Breakdown
+                            </div>
+                            <button class="btn btn-secondary btn-sm" onclick="copyDailySummaryGroupMarkdown('repositories', this)" style="padding: 0.2rem 0.55rem; font-size: 0.72rem; display: inline-flex; align-items: center; gap: 0.25rem;">
+                                <span>📋</span> Copy Markdown
+                            </button>
                         </div>
                         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.65rem;">
                             ${repos.map(rep => `
@@ -3403,6 +3426,26 @@
                 showToast("Failed to copy markdown: " + err.message, "error");
             } finally {
                 setButtonLoading(btn, false);
+            }
+        }
+
+        async function copyDailySummaryGroupMarkdown(group, btn) {
+            const select = document.getElementById('daily-summary-select');
+            const snapId = select && select.value !== 'live' ? select.value : '';
+            if (btn) setButtonLoading(btn, true, '<span class="spinner"></span>');
+            try {
+                let url = `/api/daily-summary/export?format=markdown&group=${encodeURIComponent(group)}`;
+                if (snapId) url += `&snapshot_id=${encodeURIComponent(snapId)}`;
+                const res = await fetch(url);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const mdText = await res.text();
+                await navigator.clipboard.writeText(mdText);
+                showToast("Section copied to clipboard as Markdown!", "success");
+            } catch (err) {
+                console.error("Failed to copy section markdown:", err);
+                showToast("Failed to copy markdown: " + (err.message || String(err)), "error");
+            } finally {
+                if (btn) setButtonLoading(btn, false);
             }
         }
 

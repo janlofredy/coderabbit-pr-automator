@@ -60,6 +60,42 @@ def format_friendly_datetime(dt_str: Optional[str]) -> str:
     return dt.strftime("%Y-%m-%d %H:%M UTC")
 
 
+def compute_pr_summary_status(pr: Dict[str, Any]) -> str:
+    """
+    Computes one of the 5 standardized daily summary statuses:
+    - Merge Conflict
+    - CI Failed
+    - Needs Work
+    - Ready to Merge
+    - Not Reviewed
+    """
+    has_conflict = bool(pr.get("has_conflict", False))
+    mergeable_state = str(pr.get("mergeable_state") or "").lower()
+    if has_conflict or mergeable_state in ("dirty", "conflicting"):
+        return "Merge Conflict"
+
+    has_check_error = bool(pr.get("has_check_error", False))
+    checks_status = str(pr.get("checks_status") or "").upper()
+    if has_check_error or checks_status in ("FAILED", "CHECKS FAILED", "FAILURE", "ACTION_REQUIRED"):
+        return "CI Failed"
+
+    status_badge = str(pr.get("status_badge") or "").upper()
+    has_other_changes = bool(pr.get("has_other_changes_requested", False))
+    user_review_state = str(pr.get("user_review_state") or "").upper()
+
+    if status_badge in ("COMMENTS_POSTED", "CHANGES_REQUESTED") or has_other_changes or user_review_state == "CHANGES_REQUESTED":
+        return "Needs Work"
+
+    ready_to_merge = bool(pr.get("ready_to_merge", False))
+    has_user_auto_approved = bool(pr.get("has_user_auto_approved", False))
+    has_user_manually_approved = bool(pr.get("has_user_manually_approved", False))
+
+    if ready_to_merge or status_badge == "APPROVED_BY_YOU" or has_user_auto_approved or has_user_manually_approved or user_review_state == "APPROVED":
+        return "Ready to Merge"
+
+    return "Not Reviewed"
+
+
 def generate_daily_summary(
     annotated_status: Dict[str, Any],
     github_client: Any,
@@ -89,10 +125,10 @@ def generate_daily_summary(
         created_at = pr.get("created_at", "")
         updated_at = pr.get("updated_at", "")
         status_badge = pr.get("status_badge", "PENDING_REVIEW")
-        status_label = pr.get("status_label", status_badge.replace("_", " ").title())
         has_conflict = bool(pr.get("has_conflict", False))
         has_check_error = bool(pr.get("has_check_error", False))
         ready_to_merge = bool(pr.get("ready_to_merge", False))
+        summary_status = compute_pr_summary_status(pr)
 
         open_prs.append({
             "pr_key": pr.get("pr_key", ""),
@@ -107,14 +143,16 @@ def generate_daily_summary(
             "updated_at": updated_at,
             "updated_at_friendly": format_friendly_datetime(updated_at),
             "updated_at_relative": format_relative_time(updated_at, now),
+            "status": summary_status,
+            "summary_status": summary_status,
             "status_badge": status_badge,
-            "status_label": status_label,
+            "status_label": summary_status,
             "has_conflict": has_conflict,
             "mergeable_state": pr.get("mergeable_state", "unknown"),
             "has_check_error": has_check_error,
             "checks_status": pr.get("checks_status"),
             "failed_checks": pr.get("failed_checks", []),
-            "ready_to_merge": ready_to_merge,
+            "ready_to_merge": (summary_status == "Ready to Merge"),
             "report_file": pr.get("report_file", ""),
             "is_own_pr": bool(pr.get("is_own_pr", False)),
         })
@@ -240,10 +278,13 @@ def generate_daily_summary(
         "merged_today": len(merged_prs),
         "reviews_completed_24h": len(recent_reviews),
         "needs_attention_count": len(needs_attention),
-        "ready_to_merge_count": sum(1 for p in open_prs if p.get("ready_to_merge")),
+        "ready_to_merge_count": sum(1 for p in open_prs if p.get("summary_status") == "Ready to Merge"),
+        "needs_work_count": sum(1 for p in open_prs if p.get("summary_status") == "Needs Work"),
+        "ci_failed_count": sum(1 for p in open_prs if p.get("summary_status") == "CI Failed"),
+        "conflict_count": sum(1 for p in open_prs if p.get("summary_status") == "Merge Conflict"),
+        "not_reviewed_count": sum(1 for p in open_prs if p.get("summary_status") == "Not Reviewed"),
         "auto_approved_count": sum(1 for p in open_prs if p.get("status_badge") == "APPROVED_BY_YOU"),
         "comments_count": sum(1 for p in open_prs if p.get("status_badge") == "COMMENTS_POSTED"),
-        "conflict_count": sum(1 for p in open_prs if p.get("has_conflict")),
         "check_error_count": sum(1 for p in open_prs if p.get("has_check_error")),
         "total_repositories": len([r for r in repositories if r.get("enabled", True)]),
     }
@@ -262,16 +303,144 @@ def generate_daily_summary(
     }
 
 
-def format_markdown_summary(summary_data: Dict[str, Any]) -> str:
-    """Formats the daily summary into a clean GitHub-Flavored Markdown report."""
-    date_str = summary_data.get("date", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
-    gen_at = summary_data.get("generated_at_friendly", "Just now")
-    metrics = summary_data.get("metrics", {})
+STATUS_EMOJIS = {
+    "Ready to Merge": "✅ Ready to Merge",
+    "Needs Work": "💬 Needs Work",
+    "CI Failed": "❌ CI Failed",
+    "Merge Conflict": "⚠️ Merge Conflict",
+    "Not Reviewed": "⏳ Not Reviewed",
+}
+
+
+def format_markdown_action_required(attention: List[Dict[str, Any]]) -> str:
+    """Formats Action Required items into Markdown."""
+    if not attention:
+        return "## ⚠️ Action Required (0)\n\n*No action required at this time.*\n"
+    lines = [f"## ⚠️ Action Required ({len(attention)})\n"]
+    for item in attention:
+        title = str(item.get("title", "")).replace("|", "\\|")
+        url = item.get("html_url") or "#"
+        key = item.get("pr_key", "")
+        author = item.get("author", "unknown")
+        reasons = "; ".join(item.get("reasons", []))
+        lines.append(f"- [**{key}**: {title}]({url}) by @{author} — ⚠️ *{reasons}*")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def format_markdown_open_prs(open_prs: List[Dict[str, Any]]) -> str:
+    """Formats Open Pull Requests table into Markdown."""
+    lines = [f"## 📂 Open Pull Requests ({len(open_prs)})\n"]
+    if open_prs:
+        lines.append("| PR | Repository | Author | Created | Last Updated | Status |")
+        lines.append("| :--- | :--- | :--- | :--- | :--- | :--- |")
+        for p in open_prs:
+            title = str(p.get("title", "")).replace("|", "\\|")
+            url = p.get("html_url") or "#"
+            num = p.get("number")
+            key = f"[#{num}]({url})"
+            repo = p.get("repo", "")
+            author = f"@{p.get('author', 'unknown')}"
+            created = f"{p.get('created_at_relative', '')} <br><sub>`{p.get('created_at_friendly', '')}`</sub>"
+            updated = f"{p.get('updated_at_relative', '')} <br><sub>`{p.get('updated_at_friendly', '')}`</sub>"
+            raw_st = p.get("summary_status") or p.get("status_label") or "Not Reviewed"
+            st_formatted = STATUS_EMOJIS.get(raw_st, f"`{raw_st}`")
+            lines.append(f"| {key}: {title} | `{repo}` | {author} | {created} | {updated} | {st_formatted} |")
+        lines.append("")
+    else:
+        lines.append("*No open pull requests across monitored repositories.*\n")
+    return "\n".join(lines)
+
+
+def format_markdown_merged_prs(merged_prs: List[Dict[str, Any]]) -> str:
+    """Formats Merged Pull Requests table into Markdown."""
+    lines = [f"## 🟣 Merged Pull Requests Today ({len(merged_prs)})\n"]
+    if merged_prs:
+        lines.append("| PR | Repository | Author | Created | Merged At | Branch |")
+        lines.append("| :--- | :--- | :--- | :--- | :--- | :--- |")
+        for m in merged_prs:
+            title = str(m.get("title", "")).replace("|", "\\|")
+            url = m.get("html_url") or "#"
+            num = m.get("number")
+            key = f"[#{num}]({url})"
+            repo = m.get("repo", "")
+            author = f"@{m.get('author', 'unknown')}"
+            created = f"{m.get('created_at_relative', '')} <br><sub>`{m.get('created_at_friendly', '')}`</sub>"
+            merged = f"{m.get('merged_at_relative', '')} <br><sub>`{m.get('merged_at_friendly', '')}`</sub>"
+            branch = f"`{m.get('base_ref', 'main')}`"
+            lines.append(f"| {key}: {title} | `{repo}` | {author} | {created} | {merged} | {branch} |")
+        lines.append("")
+    else:
+        lines.append("*No pull requests merged today in monitored repositories.*\n")
+    return "\n".join(lines)
+
+
+def format_markdown_review_activity(reviews: List[Dict[str, Any]]) -> str:
+    """Formats 24-hour review activity into Markdown."""
+    lines = [f"## ⚡ 24-Hour Review Activity ({len(reviews)})\n"]
+    if reviews:
+        lines.append("| Time | PR | Account | Outcome | Duration |")
+        lines.append("| :--- | :--- | :--- | :--- | :---: |")
+        for r in reviews[:20]:
+            ts = r.get("timestamp_relative", "")
+            pr_k = r.get("pr_key", "")
+            acc = r.get("account_name", "Default")
+            outcome = r.get("outcome", "REVIEWED")
+            dur = f"{r.get('duration_seconds', 0)}s"
+            lines.append(f"| {ts} | **{pr_k}** | {acc} | `{outcome}` | {dur} |")
+        lines.append("")
+    else:
+        lines.append("*No automated reviews conducted in the last 24 hours.*\n")
+    return "\n".join(lines)
+
+
+def format_markdown_repositories(repos: List[Dict[str, Any]]) -> str:
+    """Formats repository health breakdown into Markdown."""
+    lines = ["## 📁 Monitored Repositories\n"]
+    if repos:
+        lines.append("| Repository | Open PRs | Merged Today | Needs Attention | Ready to Merge |")
+        lines.append("| :--- | :---: | :---: | :---: | :---: |")
+        for rep in repos:
+            name = rep.get("repo", "")
+            lines.append(
+                f"| `{name}` | {rep.get('open_count', 0)} | {rep.get('merged_count', 0)} | {rep.get('attention_count', 0)} | {rep.get('ready_to_merge_count', 0)} |"
+            )
+        lines.append("")
+    else:
+        lines.append("*No repositories configured.*\n")
+    return "\n".join(lines)
+
+
+def format_markdown_summary(summary_data: Dict[str, Any], group: Optional[str] = None) -> str:
+    """
+    Formats the daily summary into GitHub-Flavored Markdown.
+    If group is specified, returns only the Markdown for that specific summary section:
+    - 'attention' or 'action_required'
+    - 'open_prs' or 'open'
+    - 'merged' or 'merged_prs'
+    - 'reviews' or 'activity'
+    - 'repositories' or 'repos'
+    """
     open_prs = summary_data.get("open_prs", [])
     merged_prs = summary_data.get("merged_prs", [])
     attention = summary_data.get("needs_attention", [])
     reviews = summary_data.get("recent_reviews", [])
     repos = summary_data.get("repository_breakdown", [])
+
+    if group in ("attention", "action_required"):
+        return format_markdown_action_required(attention)
+    elif group in ("open_prs", "open"):
+        return format_markdown_open_prs(open_prs)
+    elif group in ("merged", "merged_prs"):
+        return format_markdown_merged_prs(merged_prs)
+    elif group in ("reviews", "activity"):
+        return format_markdown_review_activity(reviews)
+    elif group in ("repositories", "repos"):
+        return format_markdown_repositories(repos)
+
+    date_str = summary_data.get("date", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    gen_at = summary_data.get("generated_at_friendly", "Just now")
+    metrics = summary_data.get("metrics", {})
 
     lines = [
         f"# 🐰 CodeRabbit Daily PR Summary - {date_str}",
@@ -285,101 +454,24 @@ def format_markdown_summary(summary_data: Dict[str, Any]) -> str:
         f"| ⚡ **Reviews Completed (24h)** | **{metrics.get('reviews_completed_24h', 0)}** |",
         f"| ⚠️ **Needs Attention** | **{metrics.get('needs_attention_count', 0)}** |",
         f"| ✅ **Ready to Merge** | **{metrics.get('ready_to_merge_count', 0)}** |",
-        f"| 🟢 **Auto-Approved** | **{metrics.get('auto_approved_count', 0)}** |",
-        f"| 💬 **Comments Posted** | **{metrics.get('comments_count', 0)}** |",
+        f"| 💬 **Needs Work** | **{metrics.get('needs_work_count', 0)}** |",
+        f"| ❌ **CI Failed** | **{metrics.get('ci_failed_count', 0)}** |",
+        f"| ⚠️ **Merge Conflict** | **{metrics.get('conflict_count', 0)}** |",
+        f"| ⏳ **Not Reviewed** | **{metrics.get('not_reviewed_count', 0)}** |",
         "",
     ]
 
-    # Needs Attention section
     if attention:
-        lines.append(f"## ⚠️ Action Required ({len(attention)})\n")
-        for item in attention:
-            title = item.get("title", "")
-            url = item.get("html_url") or "#"
-            key = item.get("pr_key", "")
-            author = item.get("author", "unknown")
-            reasons = "; ".join(item.get("reasons", []))
-            lines.append(f"- [**{key}**: {title}]({url}) by @{author} — ⚠️ *{reasons}*")
-        lines.append("")
+        lines.append(format_markdown_action_required(attention))
 
-    # Open PRs Breakdown
-    lines.append(f"## 📂 Open Pull Requests ({len(open_prs)})\n")
-    if open_prs:
-        lines.append("| PR | Repository | Author | Created | Last Updated | Status | CI / Merge |")
-        lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
-        for p in open_prs:
-            title = p.get("title", "").replace("|", "\\|")
-            url = p.get("html_url") or "#"
-            num = p.get("number")
-            key = f"[#{num}]({url})"
-            repo = p.get("repo", "")
-            author = f"@{p.get('author', 'unknown')}"
-            created = f"{p.get('created_at_relative', '')} <br><sub>`{p.get('created_at_friendly', '')}`</sub>"
-            updated = f"{p.get('updated_at_relative', '')} <br><sub>`{p.get('updated_at_friendly', '')}`</sub>"
-            status = p.get("status_label", "Unknown")
+    lines.append(format_markdown_open_prs(open_prs))
+    lines.append(format_markdown_merged_prs(merged_prs))
 
-            # Flags
-            flags = []
-            if p.get("has_conflict"):
-                flags.append("❌ Conflict")
-            elif p.get("ready_to_merge"):
-                flags.append("✅ Clean")
-            if p.get("has_check_error"):
-                flags.append("❌ CI Failed")
-            elif p.get("checks_status") == "PASSED":
-                flags.append("✓ CI Pass")
-            flag_str = ", ".join(flags) if flags else "-"
-
-            lines.append(f"| {key}: {title} | `{repo}` | {author} | {created} | {updated} | `{status}` | {flag_str} |")
-        lines.append("")
-    else:
-        lines.append("*No open pull requests across monitored repositories.*\n")
-
-    # Merged PRs Breakdown
-    lines.append(f"## 🟣 Merged Pull Requests Today ({len(merged_prs)})\n")
-    if merged_prs:
-        lines.append("| PR | Repository | Author | Created | Merged At | Branch |")
-        lines.append("| :--- | :--- | :--- | :--- | :--- | :--- |")
-        for m in merged_prs:
-            title = m.get("title", "").replace("|", "\\|")
-            url = m.get("html_url") or "#"
-            num = m.get("number")
-            key = f"[#{num}]({url})"
-            repo = m.get("repo", "")
-            author = f"@{m.get('author', 'unknown')}"
-            created = f"{m.get('created_at_relative', '')} <br><sub>`{m.get('created_at_friendly', '')}`</sub>"
-            merged = f"{m.get('merged_at_relative', '')} <br><sub>`{m.get('merged_at_friendly', '')}`</sub>"
-            branch = f"`{m.get('base_ref', 'main')}`"
-            lines.append(f"| {key}: {title} | `{repo}` | {author} | {created} | {merged} | {branch} |")
-        lines.append("")
-    else:
-        lines.append("*No pull requests merged today in monitored repositories.*\n")
-
-    # Automated Review Activity
     if reviews:
-        lines.append(f"## ⚡ 24-Hour Review Activity ({len(reviews)})\n")
-        lines.append("| Time | PR | Account | Outcome | Duration |")
-        lines.append("| :--- | :--- | :--- | :--- | :---: |")
-        for r in reviews[:20]:
-            ts = r.get("timestamp_relative", "")
-            pr_k = r.get("pr_key", "")
-            acc = r.get("account_name", "Default")
-            outcome = r.get("outcome", "REVIEWED")
-            dur = f"{r.get('duration_seconds', 0)}s"
-            lines.append(f"| {ts} | **{pr_k}** | {acc} | `{outcome}` | {dur} |")
-        lines.append("")
+        lines.append(format_markdown_review_activity(reviews))
 
-    # Repository Breakdown
     if repos:
-        lines.append("## 📁 Monitored Repositories\n")
-        lines.append("| Repository | Open PRs | Merged Today | Needs Attention | Ready to Merge |")
-        lines.append("| :--- | :---: | :---: | :---: | :---: |")
-        for rep in repos:
-            name = rep.get("repo", "")
-            lines.append(
-                f"| `{name}` | {rep.get('open_count', 0)} | {rep.get('merged_count', 0)} | {rep.get('attention_count', 0)} | {rep.get('ready_to_merge_count', 0)} |"
-            )
-        lines.append("")
+        lines.append(format_markdown_repositories(repos))
 
     return "\n".join(lines)
 
@@ -428,17 +520,25 @@ def format_html_summary(summary_data: Dict[str, Any]) -> str:
     </div>
     """
 
+    def status_badge_html(st: str) -> str:
+        if st == "Ready to Merge":
+            return '<span class="badge badge-green">✅ Ready to Merge</span>'
+        elif st == "Needs Work":
+            return '<span class="badge badge-yellow">💬 Needs Work</span>'
+        elif st == "CI Failed":
+            return '<span class="badge badge-red">❌ CI Failed</span>'
+        elif st == "Merge Conflict":
+            return '<span class="badge badge-red">⚠️ Merge Conflict</span>'
+        else:
+            return '<span class="badge badge-gray">⏳ Not Reviewed</span>'
+
     # Open PRs Rows
     open_rows = ""
     for p in open_prs:
-        conflict_badge = '<span class="badge badge-red">Conflict</span>' if p.get('has_conflict') else ''
-        check_badge = '<span class="badge badge-red">CI Fail</span>' if p.get('has_check_error') else ('<span class="badge badge-green">CI Pass</span>' if p.get('checks_status') == 'PASSED' else '')
-        ready_badge = '<span class="badge badge-green">Ready</span>' if p.get('ready_to_merge') else ''
-
         open_rows += f"""
         <tr>
             <td>
-                <a href="{esc(p.get('html_url'))}" target="_blank" class="pr-link"><strong>{esc(p.get('pr_key'))}</strong>: {esc(p.get('title'))}</a>
+                <a href="{esc(p.get('html_url'))}" target="_blank" class="pr-link"><strong>#{esc(p.get('number'))}</strong>: {esc(p.get('title'))}</a>
             </td>
             <td><code>{esc(p.get('repo'))}</code></td>
             <td>@{esc(p.get('author'))}</td>
@@ -450,8 +550,7 @@ def format_html_summary(summary_data: Dict[str, Any]) -> str:
                 <div>{esc(p.get('updated_at_relative'))}</div>
                 <div class="text-sub">{esc(p.get('updated_at_friendly'))}</div>
             </td>
-            <td><span class="badge badge-info">{esc(p.get('status_label'))}</span></td>
-            <td>{conflict_badge} {check_badge} {ready_badge}</td>
+            <td>{status_badge_html(p.get('summary_status', 'Not Reviewed'))}</td>
         </tr>
         """
 
@@ -563,6 +662,8 @@ def format_html_summary(summary_data: Dict[str, Any]) -> str:
         .badge-info {{ background: rgba(99, 102, 241, 0.2); color: #c7d2fe; }}
         .badge-green {{ background: rgba(16, 185, 129, 0.2); color: #6ee7b7; }}
         .badge-red {{ background: rgba(239, 68, 68, 0.2); color: #fca5a5; }}
+        .badge-yellow {{ background: rgba(245, 158, 11, 0.2); color: #fcd34d; }}
+        .badge-gray {{ background: rgba(148, 163, 184, 0.2); color: #cbd5e1; }}
         .attention-item {{ padding: 0.75rem 0; border-bottom: 1px solid var(--border); }}
         .attention-item:last-child {{ border-bottom: none; }}
         .attention-reasons {{ color: var(--danger); font-size: 0.85rem; margin-top: 0.25rem; }}
@@ -581,7 +682,7 @@ def format_html_summary(summary_data: Dict[str, Any]) -> str:
 
         <div class="section-card">
             <h2 class="section-title">📂 Open Pull Requests ({len(open_prs)})</h2>
-            {"<table><thead><tr><th>PR</th><th>Repository</th><th>Author</th><th>Created</th><th>Last Updated</th><th>Status</th><th>Health</th></tr></thead><tbody>" + open_rows + "</tbody></table>" if open_prs else "<p class='text-sub'>No open PRs found.</p>"}
+            {"<table><thead><tr><th>PR</th><th>Repository</th><th>Author</th><th>Created</th><th>Last Updated</th><th>Status</th></tr></thead><tbody>" + open_rows + "</tbody></table>" if open_prs else "<p class='text-sub'>No open PRs found.</p>"}
         </div>
 
         <div class="section-card">

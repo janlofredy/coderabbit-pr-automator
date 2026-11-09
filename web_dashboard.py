@@ -868,6 +868,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             query_params = parse_qs(parsed.query)
             fmt = query_params.get("format", ["markdown"])[0].lower()
             snap_id = query_params.get("snapshot_id", [""])[0].strip()
+            group = query_params.get("group", [""])[0].strip() or None
             if snap_id:
                 data = backend.state_manager.get_daily_snapshot(snap_id)
                 if not data:
@@ -889,7 +890,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 self.wfile.write(rendered)
                 return
             else:
-                rendered = format_markdown_summary(data).encode("utf-8")
+                rendered = format_markdown_summary(data, group=group).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/markdown; charset=utf-8")
                 self.send_header("Content-Disposition", f'attachment; filename="daily-summary-{date_tag}.md"')

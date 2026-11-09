@@ -10,6 +10,7 @@ from state_manager import StateManager
 from github_client import GitHubClient
 from daily_summary import (
     generate_daily_summary,
+    compute_pr_summary_status,
     format_markdown_summary,
     format_html_summary,
     format_relative_time,
@@ -283,6 +284,130 @@ class TestDailySummaryEngine(unittest.TestCase):
         self.assertIn("Merged Gamma", html_rep)
         self.assertIn("Action Required", html_rep)
 
+    def test_compute_pr_summary_status(self):
+        # 1. Merge Conflict
+        self.assertEqual(compute_pr_summary_status({"has_conflict": True}), "Merge Conflict")
+        self.assertEqual(compute_pr_summary_status({"mergeable_state": "dirty"}), "Merge Conflict")
+        self.assertEqual(compute_pr_summary_status({"mergeable_state": "conflicting"}), "Merge Conflict")
+
+        # 2. CI Failed
+        self.assertEqual(compute_pr_summary_status({"has_check_error": True}), "CI Failed")
+        self.assertEqual(compute_pr_summary_status({"checks_status": "FAILED"}), "CI Failed")
+        self.assertEqual(compute_pr_summary_status({"checks_status": "CHECKS FAILED"}), "CI Failed")
+        self.assertEqual(compute_pr_summary_status({"checks_status": "FAILURE"}), "CI Failed")
+        self.assertEqual(compute_pr_summary_status({"checks_status": "ACTION_REQUIRED"}), "CI Failed")
+
+        # 3. Needs Work
+        self.assertEqual(compute_pr_summary_status({"status_badge": "COMMENTS_POSTED"}), "Needs Work")
+        self.assertEqual(compute_pr_summary_status({"status_badge": "CHANGES_REQUESTED"}), "Needs Work")
+        self.assertEqual(compute_pr_summary_status({"has_other_changes_requested": True}), "Needs Work")
+        self.assertEqual(compute_pr_summary_status({"user_review_state": "CHANGES_REQUESTED"}), "Needs Work")
+
+        # 4. Ready to Merge
+        self.assertEqual(compute_pr_summary_status({"ready_to_merge": True}), "Ready to Merge")
+        self.assertEqual(compute_pr_summary_status({"status_badge": "APPROVED_BY_YOU"}), "Ready to Merge")
+        self.assertEqual(compute_pr_summary_status({"has_user_auto_approved": True}), "Ready to Merge")
+        self.assertEqual(compute_pr_summary_status({"has_user_manually_approved": True}), "Ready to Merge")
+        self.assertEqual(compute_pr_summary_status({"user_review_state": "APPROVED"}), "Ready to Merge")
+
+        # 5. Not Reviewed
+        self.assertEqual(compute_pr_summary_status({}), "Not Reviewed")
+        self.assertEqual(compute_pr_summary_status({"status_badge": "PENDING_REVIEW"}), "Not Reviewed")
+        self.assertEqual(compute_pr_summary_status({"status_badge": "RATE_LIMITED"}), "Not Reviewed")
+        self.assertEqual(compute_pr_summary_status({"status_badge": "IN_PROGRESS"}), "Not Reviewed")
+        self.assertEqual(compute_pr_summary_status({"status_badge": "OWN_PR"}), "Not Reviewed")
+
+    def test_format_markdown_summary_by_group(self):
+        sample_data = {
+            "date": "2026-11-09",
+            "needs_attention": [
+                {
+                    "pr_key": "owner/repo#1",
+                    "title": "Fix Bug",
+                    "html_url": "https://github.com/owner/repo/pull/1",
+                    "author": "alice",
+                    "reasons": ["Merge Conflict"],
+                    "has_conflict": True,
+                    "has_check_error": False,
+                }
+            ],
+            "open_prs": [
+                {
+                    "number": 1,
+                    "title": "Fix Bug",
+                    "repo": "owner/repo",
+                    "author": "alice",
+                    "html_url": "https://github.com/owner/repo/pull/1",
+                    "created_at_friendly": "2026-11-08 10:00 UTC",
+                    "created_at_relative": "1d ago",
+                    "updated_at_friendly": "2026-11-09 08:00 UTC",
+                    "updated_at_relative": "2h ago",
+                    "summary_status": "Merge Conflict",
+                }
+            ],
+            "merged_prs": [
+                {
+                    "number": 2,
+                    "title": "Add Feature",
+                    "repo": "owner/repo",
+                    "author": "bob",
+                    "html_url": "https://github.com/owner/repo/pull/2",
+                    "created_at_friendly": "2026-11-07 10:00 UTC",
+                    "created_at_relative": "2d ago",
+                    "merged_at_friendly": "2026-11-09 09:00 UTC",
+                    "merged_at_relative": "1h ago",
+                    "base_ref": "main",
+                }
+            ],
+            "recent_reviews": [
+                {
+                    "timestamp_friendly": "2026-11-09 08:30 UTC",
+                    "timestamp_relative": "30m ago",
+                    "pr_key": "owner/repo#1",
+                    "account_name": "Default",
+                    "outcome": "APPROVE",
+                    "duration_seconds": 15,
+                }
+            ],
+            "repository_breakdown": [
+                {
+                    "repo": "owner/repo",
+                    "open_count": 1,
+                    "merged_count": 1,
+                    "attention_count": 1,
+                    "ready_to_merge_count": 0,
+                }
+            ],
+        }
+
+        # Test group='open_prs'
+        md_open = format_markdown_summary(sample_data, group="open_prs")
+        self.assertIn("## 📂 Open Pull Requests", md_open)
+        self.assertIn("Fix Bug", md_open)
+        self.assertNotIn("## 🟣 Merged Pull Requests Today", md_open)
+        self.assertNotIn("## ⚠️ Action Required", md_open)
+
+        # Test group='merged'
+        md_merged = format_markdown_summary(sample_data, group="merged")
+        self.assertIn("## 🟣 Merged Pull Requests Today", md_merged)
+        self.assertIn("Add Feature", md_merged)
+        self.assertNotIn("## 📂 Open Pull Requests", md_merged)
+
+        # Test group='attention'
+        md_att = format_markdown_summary(sample_data, group="attention")
+        self.assertIn("## ⚠️ Action Required", md_att)
+        self.assertNotIn("## 📂 Open Pull Requests", md_att)
+
+        # Test group='reviews'
+        md_rev = format_markdown_summary(sample_data, group="reviews")
+        self.assertIn("## ⚡ 24-Hour Review Activity", md_rev)
+        self.assertNotIn("## 📂 Open Pull Requests", md_rev)
+
+        # Test group='repositories'
+        md_repo = format_markdown_summary(sample_data, group="repositories")
+        self.assertIn("## 📁 Monitored Repositories", md_repo)
+        self.assertNotIn("## 📂 Open Pull Requests", md_repo)
+
     def test_dashboard_backend_daily_summary_integration(self):
         backend = DashboardBackend(
             config_manager=self.cfg_mgr,
@@ -400,6 +525,21 @@ class TestDailySummaryEngine(unittest.TestCase):
             export_md_handler.do_GET()
             md_content = export_md_handler.wfile.getvalue().decode("utf-8")
             self.assertIn("# 🐰 CodeRabbit Daily PR Summary", md_content)
+
+            # Test GET /api/daily-summary/export?format=markdown&group=open_prs
+            export_group_handler = DashboardRequestHandler.__new__(DashboardRequestHandler)
+            export_group_handler.path = "/api/daily-summary/export?format=markdown&group=open_prs"
+            export_group_handler.command = "GET"
+            export_group_handler.wfile = BytesIO()
+            export_group_handler.rfile = BytesIO()
+            export_group_handler.send_response = MagicMock()
+            export_group_handler.send_header = MagicMock()
+            export_group_handler.end_headers = MagicMock()
+
+            export_group_handler.do_GET()
+            group_md_content = export_group_handler.wfile.getvalue().decode("utf-8")
+            self.assertIn("## 📂 Open Pull Requests", group_md_content)
+            self.assertNotIn("# 🐰 CodeRabbit Daily PR Summary", group_md_content)
 
             # Test GET /api/daily-summary/export?format=html
             export_html_handler = DashboardRequestHandler.__new__(DashboardRequestHandler)
