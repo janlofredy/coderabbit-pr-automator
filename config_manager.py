@@ -88,6 +88,9 @@ class ConfigManager:
         auto_approve_env = str(auto_approve_val).lower() in ("true", "1", "yes") if auto_approve_val else True
         strict_approval_val = os.getenv("STRICT_APPROVAL", "true")
         strict_approval_env = str(strict_approval_val).lower() in ("true", "1", "yes") if strict_approval_val else True
+        daily_summary_time_env = os.getenv("DAILY_SUMMARY_TIME", "00:00").strip()
+        daily_summary_enabled_val = os.getenv("DAILY_SUMMARY_ENABLED", "true")
+        daily_summary_enabled_env = str(daily_summary_enabled_val).lower() in ("true", "1", "yes") if daily_summary_enabled_val else True
         return {
             "repositories": repo_list,
             "coderabbit_accounts": [],
@@ -97,6 +100,8 @@ class ConfigManager:
             "max_files_limit": max_files,
             "auto_approve": auto_approve_env,
             "strict_approval": strict_approval_env,
+            "daily_summary_time": daily_summary_time_env or "00:00",
+            "daily_summary_enabled": daily_summary_enabled_env,
             "service_enabled": True
         }
 
@@ -243,9 +248,19 @@ class ConfigManager:
             "max_files_limit": int(cfg.get("max_files_limit", 100)),
             "auto_approve": bool(cfg.get("auto_approve", True)),
             "strict_approval": bool(cfg.get("strict_approval", True)),
+            "daily_summary_time": str(cfg.get("daily_summary_time", "00:00")),
+            "daily_summary_enabled": bool(cfg.get("daily_summary_enabled", True)),
             "service_enabled": bool(cfg.get("service_enabled", True)),
             "github_token_configured": bool(self.get_github_token())
         }
+
+    def get_daily_summary_time(self) -> str:
+        cfg = self.load_config()
+        return str(cfg.get("daily_summary_time", "00:00"))
+
+    def is_daily_summary_enabled(self) -> bool:
+        cfg = self.load_config()
+        return bool(cfg.get("daily_summary_enabled", True))
 
     def update_settings(self, updates: Dict[str, Any]) -> Dict[str, Any]:
         """Atomically updates operational settings in config.json."""
@@ -284,6 +299,14 @@ class ConfigManager:
 
         if "service_enabled" in updates:
             cfg["service_enabled"] = bool(updates["service_enabled"])
+
+        if "daily_summary_time" in updates:
+            time_val = str(updates["daily_summary_time"]).strip()
+            if re.match(r"^([01]\d|2[0-3]):[0-5]\d$", time_val):
+                cfg["daily_summary_time"] = time_val
+
+        if "daily_summary_enabled" in updates:
+            cfg["daily_summary_enabled"] = bool(updates["daily_summary_enabled"])
 
         if updates.get("clear_github_token") is True:
             self.set_github_token("")

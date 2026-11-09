@@ -290,6 +290,38 @@ class GitHubClient:
         """Lists open pull requests for a repository."""
         return self._request("GET", f"/repos/{owner}/{repo}/pulls?state=open&sort=updated&direction=desc&per_page=50")
 
+    def list_recently_merged_prs(
+        self,
+        owner: str,
+        repo: str,
+        since_timestamp: Optional[str] = None,
+        limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """
+        Lists pull requests that were merged recently for a repository.
+        If since_timestamp (ISO 8601 string) is provided, filters for PRs with merged_at >= since_timestamp.
+        """
+        try:
+            closed_prs = self._request("GET", f"/repos/{owner}/{repo}/pulls?state=closed&sort=updated&direction=desc&per_page={limit}")
+        except Exception as e:
+            logger.warning("Error fetching closed PRs for %s/%s: %s", owner, repo, e)
+            return []
+
+        if not isinstance(closed_prs, list):
+            return []
+
+        merged_prs = []
+        for pr in closed_prs:
+            if not isinstance(pr, dict):
+                continue
+            merged_at = pr.get("merged_at")
+            if not merged_at:
+                continue
+            if since_timestamp and str(merged_at) < str(since_timestamp):
+                continue
+            merged_prs.append(pr)
+        return merged_prs
+
     def get_pr(self, owner: str, repo: str, pr_number: int) -> Dict[str, Any]:
         """Retrieves detailed information for a single pull request."""
         return self._request("GET", f"/repos/{owner}/{repo}/pulls/{pr_number}")

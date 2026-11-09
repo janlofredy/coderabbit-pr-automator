@@ -32,6 +32,13 @@ A headless, continuous CI/CD background automation service and real-time Web Das
 - **Per-Account Review History & Performance Metrics**:
   - Tracks every automated review per CodeRabbit account (including the Default Global CLI account).
   - Dedicated **📜 History** modal with metrics (Total, Approvals, Comments, Errors, Average Duration), live filters, and direct links to PR Details and GitHub.
+- **📅 Daily PR Summary & Digest**:
+  - Comprehensive 24-hour digest of all open pull requests and PRs merged on the day.
+  - Detailed timestamps: when each PR was created, when it was last updated or merged, author, target branch, and current review & CI check status.
+  - Action Required triage surfacing PRs with merge conflicts, failed CI checks, or rate limits.
+  - 24-hour automated review activity breakdown and per-repository health overview.
+  - Standup-ready exports: "📋 Copy as Markdown" and downloadable HTML/Markdown reports.
+  - Automated daily snapshots archived at a configurable time (default 00:00 midnight) with instant manual snapshot capture.
 - **High-Performance Real-Time Web Dashboard (Port 8765)**:
   - Multi-threaded Python server (`ThreadingMixIn`) with non-blocking concurrent polling via `ThreadPoolExecutor` (sub-millisecond `/api/status`).
   - Complete raw CodeRabbit CLI stdout and stderr are written to container logs and retained in each PR's **Details & Logs** history.
@@ -166,6 +173,12 @@ If no accounts are configured in the dashboard, the application automatically us
 | `/api/trigger` | `POST` | Starts a full scan, or queues a selected PR: `{"force": false, "pr_key": "owner/repo#1"}` |
 | `/api/clear-rate-limit` | `POST` | Clears active rate limit cooldown globally |
 | `/api/service/toggle` | `POST` | Pauses or resumes background review worker |
+| `/api/daily-summary` | `GET` | Returns live 24-hour summary with open PRs, merged PRs on the day, attention items, and review metrics |
+| `/api/daily-summary/snapshots` | `GET` | Returns list of archived daily summary snapshots |
+| `/api/daily-summary/snapshots/<id>` | `GET` | Returns full data for a specific archived snapshot |
+| `/api/daily-summary/snapshot` | `POST` | Manually captures and archives a daily snapshot immediately |
+| `/api/daily-summary/export` | `GET` | Downloads or exports summary as Markdown or HTML (`?format=markdown|html&snapshot_id=<id>`) |
+| `/api/daily-summary/snapshots/delete` | `POST` | Deletes an archived snapshot (`{"id": "<id>"}`) |
 | `/reports/<file>` | `GET` | Serves generated HTML review reports |
 
 ---

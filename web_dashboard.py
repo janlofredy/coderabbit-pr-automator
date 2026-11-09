@@ -17,6 +17,7 @@ from github_client import GitHubClient
 from auto_review_prs import AutoReviewEngine, DEFAULT_REVIEWS_DIR
 from repository_management import RepositoryManagementService
 from review_management import ReviewManagementService
+from daily_summary import generate_daily_summary, format_markdown_summary, format_html_summary
 
 logger = logging.getLogger("dashboard")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -112,6 +113,7 @@ class DashboardBackend:
             for _ in range(max(1, interval // 5)):
                 if not self._is_running:
                     break
+                self._check_daily_snapshot_schedule()
                 time.sleep(5)
 
     def _review_worker_loop(self) -> None:
@@ -584,6 +586,41 @@ class DashboardBackend:
             "latest_log": logs[0] if logs else None
         }
 
+    def get_daily_summary(self, hours: int = 24) -> Dict[str, Any]:
+        """Calculates live daily summary across all open and recently merged PRs and review activity."""
+        annotated_status = self.get_annotated_status()
+        return generate_daily_summary(
+            annotated_status=annotated_status,
+            github_client=self.github_client,
+            state_manager=self.state_manager,
+            hours=hours
+        )
+
+    def create_daily_snapshot(self) -> Dict[str, Any]:
+        """Generates a snapshot from live data and stores it in persistent state."""
+        summary = self.get_daily_summary(hours=24)
+        snap_id = self.state_manager.save_daily_snapshot(summary)
+        summary["id"] = snap_id
+        return summary
+
+    def _check_daily_snapshot_schedule(self) -> None:
+        """Periodically checks if scheduled daily snapshot should run."""
+        try:
+            if not self.config_manager.is_daily_summary_enabled():
+                return
+            sched_time = self.config_manager.get_daily_summary_time()
+            now = datetime.now()
+            current_time_str = now.strftime("%H:%M")
+            today_date = now.strftime("%Y-%m-%d")
+
+            if current_time_str == sched_time:
+                existing = self.state_manager.get_daily_snapshot(today_date)
+                if not existing:
+                    logger.info("Triggering scheduled daily snapshot for %s at %s", today_date, sched_time)
+                    self.create_daily_snapshot()
+        except Exception as e:
+            logger.error("Error evaluating scheduled daily snapshot: %s", e)
+
 
 
 # Global backend instance
@@ -786,6 +823,82 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 self.wfile.write(b"Report not found")
                 return
 
+        if path == "/api/daily-summary":
+            query_params = parse_qs(parsed.query)
+            hours = 24
+            if "hours" in query_params:
+                try:
+                    hours = max(1, min(168, int(query_params["hours"][0])))
+                except (ValueError, TypeError):
+                    hours = 24
+            summary = backend.get_daily_summary(hours=hours)
+            self._set_headers(200)
+            self.wfile.write(json.dumps(summary).encode("utf-8"))
+            return
+
+        if path == "/api/daily-summary/snapshots":
+            snapshots = backend.state_manager.get_daily_snapshots()
+            safe_snaps = []
+            for s in snapshots:
+                safe_snaps.append({
+                    "id": s.get("id"),
+                    "date": s.get("date"),
+                    "created_at": s.get("created_at"),
+                    "created_at_friendly": s.get("created_at_friendly"),
+                    "metrics": s.get("metrics", {}),
+                    "open_prs_count": len(s.get("open_prs", [])),
+                    "merged_prs_count": len(s.get("merged_prs", [])),
+                })
+            self._set_headers(200)
+            self.wfile.write(json.dumps(safe_snaps).encode("utf-8"))
+            return
+
+        if path.startswith("/api/daily-summary/snapshots/"):
+            snap_id = path.replace("/api/daily-summary/snapshots/", "").strip()
+            snap = backend.state_manager.get_daily_snapshot(snap_id)
+            if snap:
+                self._set_headers(200)
+                self.wfile.write(json.dumps(snap).encode("utf-8"))
+            else:
+                self._set_headers(404)
+                self.wfile.write(json.dumps({"error": f"Snapshot '{snap_id}' not found"}).encode("utf-8"))
+            return
+
+        if path == "/api/daily-summary/export":
+            query_params = parse_qs(parsed.query)
+            fmt = query_params.get("format", ["markdown"])[0].lower()
+            snap_id = query_params.get("snapshot_id", [""])[0].strip()
+            if snap_id:
+                data = backend.state_manager.get_daily_snapshot(snap_id)
+                if not data:
+                    self._set_headers(404)
+                    self.wfile.write(json.dumps({"error": "Snapshot not found"}).encode("utf-8"))
+                    return
+            else:
+                data = backend.get_daily_summary()
+
+            date_tag = data.get("date", datetime.now().strftime("%Y-%m-%d"))
+            if fmt == "html":
+                rendered = format_html_summary(data).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Disposition", f'attachment; filename="daily-summary-{date_tag}.html"')
+                self.send_header("Content-Length", str(len(rendered)))
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(rendered)
+                return
+            else:
+                rendered = format_markdown_summary(data).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/markdown; charset=utf-8")
+                self.send_header("Content-Disposition", f'attachment; filename="daily-summary-{date_tag}.md"')
+                self.send_header("Content-Length", str(len(rendered)))
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(rendered)
+                return
+
         self._set_headers(404, "text/plain")
         self.wfile.write(b"Not Found")
 
@@ -957,6 +1070,23 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             backend.state_manager.clear_account_logs(acc_id)
             self._set_headers(200)
             self.wfile.write(json.dumps({"status": "history_cleared", "id": acc_id}).encode("utf-8"))
+            return
+
+        if path == "/api/daily-summary/snapshot":
+            snap = backend.create_daily_snapshot()
+            self._set_headers(200)
+            self.wfile.write(json.dumps(snap).encode("utf-8"))
+            return
+
+        if path == "/api/daily-summary/snapshots/delete":
+            snap_id = data.get("id") or data.get("snapshot_id")
+            if not snap_id:
+                self._set_headers(400)
+                self.wfile.write(json.dumps({"error": "id is required"}).encode("utf-8"))
+                return
+            deleted = backend.state_manager.delete_daily_snapshot(snap_id)
+            self._set_headers(200 if deleted else 404)
+            self.wfile.write(json.dumps({"deleted": deleted, "id": snap_id}).encode("utf-8"))
             return
 
         self._set_headers(404, "text/plain")

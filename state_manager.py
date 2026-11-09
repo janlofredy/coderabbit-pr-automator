@@ -4,7 +4,7 @@ import re
 import time
 import logging
 from datetime import datetime, timezone
-from typing import Dict, Any, Tuple, Optional
+from typing import Dict, Any, Tuple, Optional, List
 
 logger = logging.getLogger("state_manager")
 
@@ -36,7 +36,8 @@ class StateManager:
             "review_queue": [],
             "account_rate_limits": {},
             "last_account_index": -1,
-            "account_logs": {}
+            "account_logs": {},
+            "daily_snapshots": []
         }
 
     def ensure_state_exists(self) -> None:
@@ -352,9 +353,10 @@ class StateManager:
             pr_logs[pr_key] = []
 
         now = datetime.now(timezone.utc)
-        log_id = f"{int(now.timestamp() * 1000000)}_{pr_key.replace('/', '_').replace('#', '_')}"
+        log_id = log_entry.get("log_id") or f"{int(now.timestamp() * 1000000)}_{pr_key.replace('/', '_').replace('#', '_')}"
         log_entry["log_id"] = log_id
-        log_entry["timestamp"] = now.isoformat()
+        if "timestamp" not in log_entry:
+            log_entry["timestamp"] = now.isoformat()
 
         pr_logs[pr_key].insert(0, log_entry)
         pr_logs[pr_key] = pr_logs[pr_key][:max_history]
@@ -592,4 +594,135 @@ class StateManager:
             state["review_queue"] = queue
             self.save_state(state)
             return True
+
+    def save_daily_snapshot(self, snapshot: Dict[str, Any], max_snapshots: int = 30) -> str:
+        """
+        Saves a daily summary snapshot to state.
+        Ensures an id, date, and created_at exist.
+        Keeps at most max_snapshots snapshots (newest first).
+        """
+        with self._lock:
+            state = self.load_state()
+            snapshots = list(state.get("daily_snapshots", []))
+
+            now = datetime.now(timezone.utc)
+            snap_id = snapshot.get("id") or f"snap_{int(now.timestamp())}_{uuid.uuid4().hex[:6]}"
+            snap_date = snapshot.get("date") or now.strftime("%Y-%m-%d")
+
+            entry = dict(snapshot)
+            entry["id"] = snap_id
+            entry["date"] = snap_date
+            if "created_at" not in entry:
+                entry["created_at"] = now.isoformat()
+
+            # Replace existing snapshot for same id or date if present
+            existing_idx = next((i for i, s in enumerate(snapshots) if s.get("id") == snap_id or s.get("date") == snap_date), None)
+            if existing_idx is not None:
+                snapshots[existing_idx] = entry
+            else:
+                snapshots.insert(0, entry)
+
+            state["daily_snapshots"] = snapshots[:max_snapshots]
+            self.save_state(state)
+            return snap_id
+
+    def get_daily_snapshots(self) -> List[Dict[str, Any]]:
+        """Returns the list of stored daily snapshots (newest first)."""
+        with self._lock:
+            state = self.load_state()
+            return list(state.get("daily_snapshots", []))
+
+    def get_daily_snapshot(self, snapshot_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieves a specific snapshot by id or date."""
+        with self._lock:
+            state = self.load_state()
+            for s in state.get("daily_snapshots", []):
+                if s.get("id") == snapshot_id or s.get("date") == snapshot_id:
+                    return dict(s)
+            return None
+
+    def delete_daily_snapshot(self, snapshot_id: str) -> bool:
+        """Deletes a specific snapshot by id."""
+        with self._lock:
+            state = self.load_state()
+            snapshots = list(state.get("daily_snapshots", []))
+            initial_len = len(snapshots)
+            snapshots = [s for s in snapshots if s.get("id") != snapshot_id]
+            if len(snapshots) < initial_len:
+                state["daily_snapshots"] = snapshots
+                self.save_state(state)
+                return True
+            return False
+
+    def get_all_recent_logs(self, hours: int = 24) -> List[Dict[str, Any]]:
+        """
+        Retrieves review execution logs across all PRs and accounts that occurred within the last N hours.
+        Returns entries sorted newest first.
+        """
+        with self._lock:
+            state = self.load_state()
+            now = datetime.now(timezone.utc)
+            cutoff_seconds = hours * 3600
+
+            recent = []
+            seen_ids = set()
+
+            # Check pr_logs
+            pr_logs = state.get("pr_logs", {})
+            for pr_key, logs in pr_logs.items():
+                if not isinstance(logs, list):
+                    continue
+                for entry in logs:
+                    if not isinstance(entry, dict):
+                        continue
+                    log_id = entry.get("log_id")
+                    if log_id and log_id in seen_ids:
+                        continue
+                    ts_str = entry.get("timestamp")
+                    if not ts_str:
+                        continue
+                    try:
+                        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                        if ts.tzinfo is None:
+                            ts = ts.replace(tzinfo=timezone.utc)
+                        delta = (now - ts).total_seconds()
+                        if 0 <= delta <= cutoff_seconds:
+                            recent_entry = dict(entry)
+                            recent_entry.setdefault("pr_key", pr_key)
+                            recent.append(recent_entry)
+                            if log_id:
+                                seen_ids.add(log_id)
+                    except Exception:
+                        pass
+
+            # Also check account_logs for any logs not in pr_logs
+            account_logs = state.get("account_logs", {})
+            for acc_id, logs in account_logs.items():
+                if not isinstance(logs, list):
+                    continue
+                for entry in logs:
+                    if not isinstance(entry, dict):
+                        continue
+                    log_id = entry.get("log_id")
+                    if log_id and log_id in seen_ids:
+                        continue
+                    ts_str = entry.get("timestamp")
+                    if not ts_str:
+                        continue
+                    try:
+                        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                        if ts.tzinfo is None:
+                            ts = ts.replace(tzinfo=timezone.utc)
+                        delta = (now - ts).total_seconds()
+                        if 0 <= delta <= cutoff_seconds:
+                            recent_entry = dict(entry)
+                            recent_entry.setdefault("account_id", acc_id)
+                            recent.append(recent_entry)
+                            if log_id:
+                                seen_ids.add(log_id)
+                    except Exception:
+                        pass
+
+            recent.sort(key=lambda x: str(x.get("timestamp", "")), reverse=True)
+            return recent
 

@@ -899,6 +899,7 @@
                 <span id="queue-btn-label">Review Queue</span>
                 <span id="queue-header-badge" class="badge badge-gray queue-header-badge">0</span>
             </button>
+            <button id="btn-daily-summary" class="btn btn-sm" onclick="openDailySummaryModal()" title="View Daily PR Summary & Digest">📅 Daily Summary</button>
             <button id="btn-settings" class="btn btn-sm" onclick="openSettingsModal()">⚙️ Settings</button>
             <button id="btn-scan-now" class="btn btn-primary btn-sm" onclick="triggerScan(false)">▶ Run Scan Now</button>
         </div>
@@ -1315,6 +1316,19 @@
                     <small style="color: var(--text-muted); font-size: 0.75rem; margin-left: 1.6rem;">If enabled, any minor issue or warning prevents approval (submits <code>COMMENT</code> instead).</small>
                 </div>
 
+                <div style="display: flex; flex-direction: column; gap: 0.5rem; padding: 0.85rem; background: #1a2234; border-radius: 6px; border: 1px solid #1f2937;">
+                    <label style="display: flex; align-items: center; gap: 0.6rem; cursor: pointer; font-size: 0.9rem;">
+                        <input type="checkbox" id="setting-daily-summary-enabled" style="width: 16px; height: 16px; accent-color: var(--primary);">
+                        <span><strong>Automated Daily Summary Snapshots</strong></span>
+                    </label>
+                    <small style="color: var(--text-muted); font-size: 0.75rem; margin-left: 1.6rem;">Automatically archives a daily snapshot of all PRs and reviews once per day.</small>
+
+                    <div style="margin-left: 1.6rem; margin-top: 0.35rem; display: flex; align-items: center; gap: 0.5rem;">
+                        <label for="setting-daily-summary-time" style="font-size: 0.8rem; color: var(--text-muted);">Scheduled Snapshot Time (HH:MM):</label>
+                        <input type="time" id="setting-daily-summary-time" class="form-input" style="max-width: 120px; padding: 0.25rem 0.5rem; font-size: 0.85rem;" value="00:00">
+                    </div>
+                </div>
+
             </div>
 
             <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--border-color);">
@@ -1387,6 +1401,46 @@
             <div id="acc-history-logs-container" style="overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 0.65rem; padding-right: 0.25rem; min-height: 200px;">
                 <div style="text-align: center; color: var(--text-muted); padding: 2.5rem 0; font-size: 0.85rem;">
                     Loading review history...
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Daily PR Summary Modal -->
+    <div id="daily-summary-modal" class="modal-overlay" onclick="if (event.target === this) closeDailySummaryModal()">
+        <div class="modal" style="max-width: 1020px; width: 95%; max-height: 90vh; display: flex; flex-direction: column;">
+            <div class="modal-header" style="margin-bottom: 0.75rem;">
+                <div style="display: flex; align-items: center; gap: 0.65rem;">
+                    <span style="font-size: 1.45rem;">📅</span>
+                    <div>
+                        <h3 id="daily-summary-modal-title" style="margin: 0; font-size: 1.2rem; font-weight: 600;">Daily PR Summary</h3>
+                        <span id="daily-summary-modal-subtitle" style="font-size: 0.78rem; color: var(--text-muted);">24-hour digest of open PRs, merged PRs, review actions, and repository health</span>
+                    </div>
+                </div>
+                <button class="modal-close-btn" onclick="closeDailySummaryModal()" title="Close (Esc)">✕</button>
+            </div>
+
+            <!-- Toolbar: Snapshot Selector + Export Controls -->
+            <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 0.75rem; background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.65rem 0.85rem; margin-bottom: 1rem;">
+                <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+                    <label for="daily-summary-select" style="font-size: 0.8rem; color: var(--text-muted); font-weight: 600;">VIEW:</label>
+                    <select id="daily-summary-select" class="form-input" style="padding: 0.3rem 0.6rem; font-size: 0.85rem; min-width: 210px;" onchange="onDailySummarySelectChange()">
+                        <option value="live">🔴 Live (Past 24 Hours)</option>
+                    </select>
+                    <button id="btn-refresh-daily-summary" class="btn btn-sm btn-secondary" onclick="loadDailySummary()" title="Refresh Summary Data">🔄</button>
+                </div>
+                <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+                    <button id="btn-snapshot-now" class="btn btn-sm btn-secondary" onclick="createDailySnapshotNow()" title="Save current state as an archived daily snapshot">📸 Snapshot Now</button>
+                    <button id="btn-copy-daily-md" class="btn btn-sm btn-secondary" onclick="copyDailySummaryMarkdown()" title="Copy formatted Markdown for Slack, Discord, or standup notes">📋 Copy Markdown</button>
+                    <button id="btn-download-daily-html" class="btn btn-sm btn-secondary" onclick="downloadDailySummaryHtml()" title="Download standalone HTML report">📥 HTML</button>
+                    <button id="btn-download-daily-md" class="btn btn-sm btn-secondary" onclick="downloadDailySummaryMd()" title="Download Markdown file">📥 Markdown</button>
+                </div>
+            </div>
+
+            <!-- Scrollable Content Area -->
+            <div id="daily-summary-content" style="flex: 1; overflow-y: auto; padding-right: 0.4rem; display: flex; flex-direction: column; gap: 1.25rem;">
+                <div style="text-align: center; padding: 2.5rem 0; color: var(--text-muted);">
+                    <span class="spinner"></span> Loading daily summary...
                 </div>
             </div>
         </div>
@@ -1565,6 +1619,10 @@
                 const accHistModal = document.getElementById('account-history-modal');
                 if (accHistModal && accHistModal.classList.contains('active')) {
                     accHistModal.classList.remove('active');
+                }
+                const dailySummaryModal = document.getElementById('daily-summary-modal');
+                if (dailySummaryModal && dailySummaryModal.classList.contains('active')) {
+                    dailySummaryModal.classList.remove('active');
                 }
             }
         });
@@ -2823,6 +2881,8 @@
             document.getElementById('setting-max-files').value = cfg.max_files_limit || 100;
             document.getElementById('setting-auto-approve').checked = (cfg.auto_approve !== false);
             document.getElementById('setting-strict-approval').checked = (cfg.strict_approval !== false);
+            document.getElementById('setting-daily-summary-enabled').checked = (cfg.daily_summary_enabled !== false);
+            document.getElementById('setting-daily-summary-time').value = cfg.daily_summary_time || "00:00";
         }
 
         function setPollPreset(seconds) {
@@ -2841,6 +2901,8 @@
             const maxFiles = parseInt(document.getElementById('setting-max-files').value, 10);
             const autoApprove = document.getElementById('setting-auto-approve').checked;
             const strictApproval = document.getElementById('setting-strict-approval').checked;
+            const dailySummaryEnabled = document.getElementById('setting-daily-summary-enabled').checked;
+            const dailySummaryTime = document.getElementById('setting-daily-summary-time').value.trim() || "00:00";
             const githubToken = document.getElementById('setting-github-token').value.trim();
             const clearGithubToken = document.getElementById('setting-clear-github-token').checked;
 
@@ -2876,6 +2938,8 @@
                 max_files_limit: maxFiles,
                 auto_approve: autoApprove,
                 strict_approval: strictApproval,
+                daily_summary_enabled: dailySummaryEnabled,
+                daily_summary_time: dailySummaryTime,
                 github_token: githubToken,
                 clear_github_token: clearGithubToken
             };
@@ -2908,6 +2972,454 @@
             } finally {
                 setButtonLoading(saveBtn, false);
             }
+        }
+
+        /* Daily PR Summary Modal & Functionality */
+        let currentDailySummaryData = null;
+
+        function openDailySummaryModal() {
+            const modal = document.getElementById('daily-summary-modal');
+            if (!modal) return;
+            modal.classList.add('active');
+            loadDailySnapshotsDropdown();
+            loadDailySummary();
+        }
+
+        function closeDailySummaryModal() {
+            const modal = document.getElementById('daily-summary-modal');
+            if (modal) modal.classList.remove('active');
+        }
+
+        async function loadDailySnapshotsDropdown() {
+            const select = document.getElementById('daily-summary-select');
+            if (!select) return;
+            try {
+                const res = await fetch('/api/daily-summary/snapshots');
+                if (!res.ok) return;
+                const snapshots = await res.json();
+                const currentVal = select.value;
+                select.innerHTML = '<option value="live">🔴 Live (Past 24 Hours)</option>';
+                for (const snap of snapshots) {
+                    const opt = document.createElement('option');
+                    opt.value = snap.id;
+                    const dateStr = snap.date || (snap.created_at ? snap.created_at.slice(0, 10) : 'Snapshot');
+                    const friendlyTime = snap.created_at_friendly || (snap.created_at ? snap.created_at.replace('T', ' ').slice(0, 19) : '');
+                    opt.textContent = `📁 ${dateStr} Snapshot (${friendlyTime || snap.id})`;
+                    select.appendChild(opt);
+                }
+                if (currentVal && Array.from(select.options).some(o => o.value === currentVal)) {
+                    select.value = currentVal;
+                }
+            } catch (err) {
+                console.error("Could not load snapshots dropdown:", err);
+            }
+        }
+
+        function onDailySummarySelectChange() {
+            const select = document.getElementById('daily-summary-select');
+            const val = select ? select.value : 'live';
+            if (val === 'live') {
+                loadDailySummary();
+            } else {
+                loadDailySummary(val);
+            }
+        }
+
+        async function loadDailySummary(snapshotId = null) {
+            const container = document.getElementById('daily-summary-content');
+            const refreshBtn = document.getElementById('btn-refresh-daily-summary');
+            if (refreshBtn) refreshBtn.disabled = true;
+            if (container) {
+                container.innerHTML = `
+                    <div style="text-align: center; padding: 2.5rem 0; color: var(--text-muted);">
+                        <span class="spinner"></span> Loading ${snapshotId ? 'snapshot' : 'live daily summary'}...
+                    </div>
+                `;
+            }
+
+            try {
+                const url = snapshotId ? `/api/daily-summary/snapshots/${encodeURIComponent(snapshotId)}` : '/api/daily-summary';
+                const res = await fetch(url);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+                currentDailySummaryData = data;
+                renderDailySummary(data);
+            } catch (err) {
+                console.error("Failed to load daily summary:", err);
+                if (container) {
+                    container.innerHTML = `
+                        <div style="text-align: center; padding: 2.5rem 0; color: #ef4444;">
+                            Failed to load daily summary: ${escapeHtml(err.message || String(err))}
+                        </div>
+                    `;
+                }
+                showToast("Failed to load daily summary", "error");
+            } finally {
+                if (refreshBtn) refreshBtn.disabled = false;
+            }
+        }
+
+        function renderDailySummary(data) {
+            const container = document.getElementById('daily-summary-content');
+            if (!container || !data) return;
+
+            const metrics = data.metrics || {};
+            const openPrs = data.open_prs || [];
+            const mergedPrs = data.merged_prs || [];
+            const attention = data.needs_attention || [];
+            const reviews = data.recent_reviews || [];
+            const repos = data.repository_breakdown || [];
+
+            // 1. KPI Metrics Grid
+            const metricsHtml = `
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.65rem;">
+                    <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.75rem; text-align: center;">
+                        <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; font-weight: 600;">Total Open PRs</div>
+                        <div style="font-size: 1.5rem; font-weight: 700; color: #f8fafc; margin-top: 0.2rem;">${metrics.total_open_prs || 0}</div>
+                    </div>
+                    <div style="background: rgba(168, 85, 247, 0.08); border: 1px solid rgba(168, 85, 247, 0.25); border-radius: 8px; padding: 0.75rem; text-align: center;">
+                        <div style="font-size: 0.72rem; color: #c084fc; text-transform: uppercase; font-weight: 600;">Merged Today</div>
+                        <div style="font-size: 1.5rem; font-weight: 700; color: #d8b4fe; margin-top: 0.2rem;">${metrics.merged_today || 0}</div>
+                    </div>
+                    <div style="background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; padding: 0.75rem; text-align: center;">
+                        <div style="font-size: 0.72rem; color: #7dd3fc; text-transform: uppercase; font-weight: 600;">Reviews (24h)</div>
+                        <div style="font-size: 1.5rem; font-weight: 700; color: #38bdf8; margin-top: 0.2rem;">${metrics.reviews_completed_24h || 0}</div>
+                    </div>
+                    <div style="background: ${metrics.needs_attention_count > 0 ? 'rgba(239, 68, 68, 0.12)' : 'rgba(255,255,255,0.03)'}; border: 1px solid ${metrics.needs_attention_count > 0 ? 'rgba(239, 68, 68, 0.35)' : 'var(--border-color)'}; border-radius: 8px; padding: 0.75rem; text-align: center;">
+                        <div style="font-size: 0.72rem; color: ${metrics.needs_attention_count > 0 ? '#fca5a5' : 'var(--text-muted)'}; text-transform: uppercase; font-weight: 600;">Needs Attention</div>
+                        <div style="font-size: 1.5rem; font-weight: 700; color: ${metrics.needs_attention_count > 0 ? '#f87171' : '#f8fafc'}; margin-top: 0.2rem;">${metrics.needs_attention_count || 0}</div>
+                    </div>
+                    <div style="background: rgba(34, 197, 94, 0.08); border: 1px solid rgba(34, 197, 94, 0.25); border-radius: 8px; padding: 0.75rem; text-align: center;">
+                        <div style="font-size: 0.72rem; color: #86efac; text-transform: uppercase; font-weight: 600;">Ready to Merge</div>
+                        <div style="font-size: 1.5rem; font-weight: 700; color: #4ade80; margin-top: 0.2rem;">${metrics.ready_to_merge_count || 0}</div>
+                    </div>
+                    <div style="background: rgba(99, 102, 241, 0.08); border: 1px solid rgba(99, 102, 241, 0.25); border-radius: 8px; padding: 0.75rem; text-align: center;">
+                        <div style="font-size: 0.72rem; color: #a5b4fc; text-transform: uppercase; font-weight: 600;">Auto-Approved</div>
+                        <div style="font-size: 1.5rem; font-weight: 700; color: #818cf8; margin-top: 0.2rem;">${metrics.auto_approved_count || 0}</div>
+                    </div>
+                </div>
+            `;
+
+            // 2. Action Required Section (if any)
+            let attentionHtml = '';
+            if (attention && attention.length > 0) {
+                attentionHtml = `
+                    <div style="background: rgba(239, 68, 68, 0.05); border: 1px solid rgba(239, 68, 68, 0.25); border-radius: 8px; padding: 0.85rem 1rem;">
+                        <div style="font-size: 0.95rem; font-weight: 600; color: #f87171; display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.65rem;">
+                            <span>⚠️</span> Action Required (${attention.length})
+                        </div>
+                        <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                            ${attention.map(item => `
+                                <div style="display: flex; justify-content: space-between; align-items: flex-start; padding: 0.5rem 0.65rem; background: rgba(0,0,0,0.25); border-radius: 6px; font-size: 0.85rem;">
+                                    <div>
+                                        <a href="${escapeHtml(item.html_url || '#')}" target="_blank" style="color: #60a5fa; font-weight: 600; text-decoration: none;">
+                                            ${escapeHtml(item.pr_key)}: ${escapeHtml(item.title)}
+                                        </a>
+                                        <span style="color: var(--text-muted); font-size: 0.78rem; margin-left: 0.4rem;">by @${escapeHtml(item.author)}</span>
+                                        <div style="color: #fca5a5; font-size: 0.78rem; margin-top: 0.25rem;">
+                                            ${(item.reasons || []).map(r => `• ${escapeHtml(r)}`).join(' &nbsp; ')}
+                                        </div>
+                                    </div>
+                                    <div style="display: flex; gap: 0.35rem; align-items: center;">
+                                        ${item.has_conflict ? '<span class="badge badge-red" style="font-size: 0.7rem;">Conflict</span>' : ''}
+                                        ${item.has_check_error ? '<span class="badge badge-red" style="font-size: 0.7rem;">CI Fail</span>' : ''}
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+            }
+
+            // 3. Open Pull Requests Table
+            let openPrsHtml = `
+                <div style="background: var(--card-bg, #111827); border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                        <div style="font-size: 1rem; font-weight: 600; display: flex; align-items: center; gap: 0.4rem;">
+                            <span>📂</span> All Open Pull Requests (${openPrs.length})
+                        </div>
+                    </div>
+            `;
+            if (openPrs.length === 0) {
+                openPrsHtml += `<div style="text-align: center; color: var(--text-muted); padding: 1.5rem 0; font-size: 0.85rem;">No open pull requests across monitored repositories.</div>`;
+            } else {
+                openPrsHtml += `
+                    <div style="overflow-x: auto;">
+                        <table style="width: 100%; border-collapse: collapse; font-size: 0.83rem; text-align: left;">
+                            <thead>
+                                <tr style="border-bottom: 1px solid var(--border-color); color: var(--text-muted); font-size: 0.75rem; text-transform: uppercase;">
+                                    <th style="padding: 0.5rem 0.6rem;">Pull Request</th>
+                                    <th style="padding: 0.5rem 0.6rem;">Repository</th>
+                                    <th style="padding: 0.5rem 0.6rem;">Author</th>
+                                    <th style="padding: 0.5rem 0.6rem;">Created</th>
+                                    <th style="padding: 0.5rem 0.6rem;">Last Updated</th>
+                                    <th style="padding: 0.5rem 0.6rem;">Status</th>
+                                    <th style="padding: 0.5rem 0.6rem;">Health</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${openPrs.map(p => {
+                                    let badgeClass = 'badge-gray';
+                                    if (p.status_badge === 'APPROVED_BY_YOU') badgeClass = 'badge-green';
+                                    else if (p.status_badge === 'COMMENTS_POSTED') badgeClass = 'badge-yellow';
+                                    else if (p.status_badge === 'RATE_LIMITED') badgeClass = 'badge-orange';
+                                    else if (p.status_badge === 'IN_PROGRESS') badgeClass = 'badge-blue';
+                                    else if (p.status_badge === 'SKIPPED_MAX_FILES') badgeClass = 'badge-red';
+                                    else if (p.status_badge === 'OWN_PR') badgeClass = 'badge-purple';
+
+                                    const healthBadges = [];
+                                    if (p.has_conflict) healthBadges.push('<span class="badge badge-red" style="font-size: 0.68rem;">Conflict</span>');
+                                    else if (p.ready_to_merge) healthBadges.push('<span class="badge badge-green" style="font-size: 0.68rem;">Ready</span>');
+
+                                    if (p.has_check_error) healthBadges.push('<span class="badge badge-red" style="font-size: 0.68rem;">CI Fail</span>');
+                                    else if (p.checks_status === 'PASSED') healthBadges.push('<span class="badge badge-green" style="font-size: 0.68rem;">CI Pass</span>');
+
+                                    return `
+                                        <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
+                                            <td style="padding: 0.55rem 0.6rem; max-width: 280px;">
+                                                <a href="${escapeHtml(p.html_url || '#')}" target="_blank" style="color: #60a5fa; font-weight: 600; text-decoration: none;">
+                                                    #${escapeHtml(p.number)}: ${escapeHtml(p.title)}
+                                                </a>
+                                            </td>
+                                            <td style="padding: 0.55rem 0.6rem; color: var(--text-muted); font-size: 0.78rem;">
+                                                <code>${escapeHtml(p.repo)}</code>
+                                            </td>
+                                            <td style="padding: 0.55rem 0.6rem; color: #cbd5e1;">@${escapeHtml(p.author)}</td>
+                                            <td style="padding: 0.55rem 0.6rem;">
+                                                <div style="color: #f1f5f9;">${escapeHtml(p.created_at_relative || 'Unknown')}</div>
+                                                <div style="color: var(--text-muted); font-size: 0.7rem;">${escapeHtml(p.created_at_friendly || '')}</div>
+                                            </td>
+                                            <td style="padding: 0.55rem 0.6rem;">
+                                                <div style="color: #f1f5f9;">${escapeHtml(p.updated_at_relative || 'Unknown')}</div>
+                                                <div style="color: var(--text-muted); font-size: 0.7rem;">${escapeHtml(p.updated_at_friendly || '')}</div>
+                                            </td>
+                                            <td style="padding: 0.55rem 0.6rem;">
+                                                <span class="badge ${badgeClass}" style="font-size: 0.7rem;">${escapeHtml(p.status_label || p.status_badge)}</span>
+                                            </td>
+                                            <td style="padding: 0.55rem 0.6rem;">
+                                                <div style="display: flex; gap: 0.25rem; flex-wrap: wrap;">
+                                                    ${healthBadges.join('') || '<span style="color: var(--text-muted); font-size: 0.72rem;">—</span>'}
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    `;
+                                }).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            }
+            openPrsHtml += `</div>`;
+
+            // 4. Merged Pull Requests Today Table
+            let mergedPrsHtml = `
+                <div style="background: var(--card-bg, #111827); border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                        <div style="font-size: 1rem; font-weight: 600; display: flex; align-items: center; gap: 0.4rem;">
+                            <span>🟣</span> Merged Pull Requests Today (${mergedPrs.length})
+                        </div>
+                    </div>
+            `;
+            if (mergedPrs.length === 0) {
+                mergedPrsHtml += `<div style="text-align: center; color: var(--text-muted); padding: 1.5rem 0; font-size: 0.85rem;">No pull requests merged in monitored repositories in this window.</div>`;
+            } else {
+                mergedPrsHtml += `
+                    <div style="overflow-x: auto;">
+                        <table style="width: 100%; border-collapse: collapse; font-size: 0.83rem; text-align: left;">
+                            <thead>
+                                <tr style="border-bottom: 1px solid var(--border-color); color: var(--text-muted); font-size: 0.75rem; text-transform: uppercase;">
+                                    <th style="padding: 0.5rem 0.6rem;">Pull Request</th>
+                                    <th style="padding: 0.5rem 0.6rem;">Repository</th>
+                                    <th style="padding: 0.5rem 0.6rem;">Author</th>
+                                    <th style="padding: 0.5rem 0.6rem;">Created</th>
+                                    <th style="padding: 0.5rem 0.6rem;">Merged At</th>
+                                    <th style="padding: 0.5rem 0.6rem;">Target Branch</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${mergedPrs.map(m => `
+                                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
+                                        <td style="padding: 0.55rem 0.6rem; max-width: 280px;">
+                                            <a href="${escapeHtml(m.html_url || '#')}" target="_blank" style="color: #c084fc; font-weight: 600; text-decoration: none;">
+                                                #${escapeHtml(m.number)}: ${escapeHtml(m.title)}
+                                            </a>
+                                        </td>
+                                        <td style="padding: 0.55rem 0.6rem; color: var(--text-muted); font-size: 0.78rem;">
+                                            <code>${escapeHtml(m.repo)}</code>
+                                        </td>
+                                        <td style="padding: 0.55rem 0.6rem; color: #cbd5e1;">@${escapeHtml(m.author)}</td>
+                                        <td style="padding: 0.55rem 0.6rem;">
+                                            <div style="color: #f1f5f9;">${escapeHtml(m.created_at_relative || 'Unknown')}</div>
+                                            <div style="color: var(--text-muted); font-size: 0.7rem;">${escapeHtml(m.created_at_friendly || '')}</div>
+                                        </td>
+                                        <td style="padding: 0.55rem 0.6rem;">
+                                            <div style="color: #d8b4fe; font-weight: 500;">${escapeHtml(m.merged_at_relative || 'Unknown')}</div>
+                                            <div style="color: var(--text-muted); font-size: 0.7rem;">${escapeHtml(m.merged_at_friendly || '')}</div>
+                                        </td>
+                                        <td style="padding: 0.55rem 0.6rem;">
+                                            <code style="color: #818cf8;">${escapeHtml(m.base_ref || 'main')}</code>
+                                        </td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            }
+            mergedPrsHtml += `</div>`;
+
+            // 5. Automated Review Activity (24h)
+            let reviewsHtml = '';
+            if (reviews && reviews.length > 0) {
+                reviewsHtml = `
+                    <div style="background: var(--card-bg, #111827); border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem;">
+                        <div style="font-size: 1rem; font-weight: 600; display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.75rem;">
+                            <span>⚡</span> 24-Hour Review Activity (${reviews.length})
+                        </div>
+                        <div style="overflow-x: auto;">
+                            <table style="width: 100%; border-collapse: collapse; font-size: 0.83rem; text-align: left;">
+                                <thead>
+                                    <tr style="border-bottom: 1px solid var(--border-color); color: var(--text-muted); font-size: 0.75rem; text-transform: uppercase;">
+                                        <th style="padding: 0.5rem 0.6rem;">Time</th>
+                                        <th style="padding: 0.5rem 0.6rem;">PR</th>
+                                        <th style="padding: 0.5rem 0.6rem;">Account</th>
+                                        <th style="padding: 0.5rem 0.6rem;">Outcome</th>
+                                        <th style="padding: 0.5rem 0.6rem;">Duration</th>
+                                        <th style="padding: 0.5rem 0.6rem;">Report</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${reviews.slice(0, 15).map(r => {
+                                        let outBadge = 'badge-gray';
+                                        if (r.outcome === 'APPROVE') outBadge = 'badge-green';
+                                        else if (r.outcome === 'COMMENT') outBadge = 'badge-blue';
+                                        else if (r.outcome === 'RATE_LIMITED') outBadge = 'badge-orange';
+                                        else if (r.outcome === 'ERROR') outBadge = 'badge-red';
+
+                                        return `
+                                            <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
+                                                <td style="padding: 0.5rem 0.6rem; color: var(--text-muted);">${escapeHtml(r.timestamp_relative || '')}</td>
+                                                <td style="padding: 0.5rem 0.6rem; font-weight: 600; color: #f8fafc;">${escapeHtml(r.pr_key)}</td>
+                                                <td style="padding: 0.5rem 0.6rem; color: #cbd5e1;">${escapeHtml(r.account_name || 'Default')}</td>
+                                                <td style="padding: 0.5rem 0.6rem;"><span class="badge ${outBadge}" style="font-size: 0.7rem;">${escapeHtml(r.outcome)}</span></td>
+                                                <td style="padding: 0.5rem 0.6rem; color: var(--text-muted);">${escapeHtml(r.duration_seconds || 0)}s</td>
+                                                <td style="padding: 0.5rem 0.6rem;">
+                                                    ${r.report_file ? `<a href="/reports/${escapeHtml(r.report_file)}" target="_blank" class="btn btn-sm btn-secondary" style="padding: 0.15rem 0.45rem; font-size: 0.7rem; text-decoration: none;">📄 Report</a>` : '—'}
+                                                </td>
+                                            </tr>
+                                        `;
+                                    }).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                `;
+            }
+
+            // 6. Monitored Repositories Health
+            let reposHtml = '';
+            if (repos && repos.length > 0) {
+                reposHtml = `
+                    <div style="background: var(--card-bg, #111827); border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem;">
+                        <div style="font-size: 1rem; font-weight: 600; display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.75rem;">
+                            <span>📁</span> Repositories Breakdown
+                        </div>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.65rem;">
+                            ${repos.map(rep => `
+                                <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 6px; padding: 0.75rem;">
+                                    <div style="font-weight: 600; font-size: 0.88rem; color: #f8fafc; margin-bottom: 0.4rem;">
+                                        <code>${escapeHtml(rep.repo)}</code>
+                                    </div>
+                                    <div style="display: flex; justify-content: space-between; font-size: 0.78rem; color: var(--text-muted); margin-bottom: 0.2rem;">
+                                        <span>Open PRs:</span>
+                                        <strong style="color: #f8fafc;">${rep.open_count}</strong>
+                                    </div>
+                                    <div style="display: flex; justify-content: space-between; font-size: 0.78rem; color: var(--text-muted); margin-bottom: 0.2rem;">
+                                        <span>Merged Today:</span>
+                                        <strong style="color: #c084fc;">${rep.merged_count}</strong>
+                                    </div>
+                                    <div style="display: flex; justify-content: space-between; font-size: 0.78rem; color: var(--text-muted); margin-bottom: 0.2rem;">
+                                        <span>Needs Attention:</span>
+                                        <strong style="color: ${rep.attention_count > 0 ? '#f87171' : '#4ade80'};">${rep.attention_count}</strong>
+                                    </div>
+                                    <div style="display: flex; justify-content: space-between; font-size: 0.78rem; color: var(--text-muted);">
+                                        <span>Ready to Merge:</span>
+                                        <strong style="color: #4ade80;">${rep.ready_to_merge_count}</strong>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+            }
+
+            container.innerHTML = `
+                ${metricsHtml}
+                ${attentionHtml}
+                ${openPrsHtml}
+                ${mergedPrsHtml}
+                ${reviewsHtml}
+                ${reposHtml}
+            `;
+        }
+
+        async function createDailySnapshotNow() {
+            const btn = document.getElementById('btn-snapshot-now');
+            setButtonLoading(btn, true, '<span class="spinner"></span>Capturing...');
+            showToast("Capturing daily summary snapshot...", "info");
+            try {
+                const res = await fetch('/api/daily-summary/snapshot', { method: 'POST' });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const snap = await res.json();
+                showToast(`Daily snapshot for ${snap.date} archived!`, "success");
+                await loadDailySnapshotsDropdown();
+                const select = document.getElementById('daily-summary-select');
+                if (select && snap.id) {
+                    select.value = snap.id;
+                    renderDailySummary(snap);
+                }
+            } catch (err) {
+                console.error("Failed to create snapshot:", err);
+                showToast("Failed to create snapshot: " + err.message, "error");
+            } finally {
+                setButtonLoading(btn, false);
+            }
+        }
+
+        async function copyDailySummaryMarkdown() {
+            const btn = document.getElementById('btn-copy-daily-md');
+            const select = document.getElementById('daily-summary-select');
+            const snapId = select && select.value !== 'live' ? select.value : '';
+            setButtonLoading(btn, true, '<span class="spinner"></span>Copying...');
+            try {
+                const url = '/api/daily-summary/export?format=markdown' + (snapId ? `&snapshot_id=${encodeURIComponent(snapId)}` : '');
+                const res = await fetch(url);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const mdText = await res.text();
+                await navigator.clipboard.writeText(mdText);
+                showToast("Daily summary copied to clipboard as Markdown!", "success");
+            } catch (err) {
+                console.error("Failed to copy markdown:", err);
+                showToast("Failed to copy markdown: " + err.message, "error");
+            } finally {
+                setButtonLoading(btn, false);
+            }
+        }
+
+        function downloadDailySummaryHtml() {
+            const select = document.getElementById('daily-summary-select');
+            const snapId = select && select.value !== 'live' ? select.value : '';
+            const url = '/api/daily-summary/export?format=html' + (snapId ? `&snapshot_id=${encodeURIComponent(snapId)}` : '');
+            window.location.href = url;
+            showToast("Downloading Daily Summary HTML report...", "info");
+        }
+
+        function downloadDailySummaryMd() {
+            const select = document.getElementById('daily-summary-select');
+            const snapId = select && select.value !== 'live' ? select.value : '';
+            const url = '/api/daily-summary/export?format=markdown' + (snapId ? `&snapshot_id=${encodeURIComponent(snapId)}` : '');
+            window.location.href = url;
+            showToast("Downloading Daily Summary Markdown file...", "info");
         }
 
         // Tickers & Init
