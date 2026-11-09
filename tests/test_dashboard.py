@@ -900,6 +900,63 @@ class TestDashboardBackend(unittest.TestCase):
         self.assertEqual(pr["total_approvals"], 1)
         self.assertFalse(pr["ready_to_merge"])
 
+    def test_ready_to_merge_with_stacked_prs(self):
+        """Verify ready_to_merge blocks stacked PRs whose parent is still open."""
+        self.backend.repository_service._cached_prs = [
+            {
+                "pr_key": "owner/repo#10",
+                "repo": "owner/repo",
+                "number": 10,
+                "title": "Backend Base",
+                "author": "alice",
+                "base_ref": "main",
+                "head_ref": "feat-backend",
+                "has_conflict": False,
+                "mergeable_state": "clean",
+                "checks_status": "PASSED",
+                "has_check_error": False,
+                "has_other_changes_requested": False,
+                "other_approved_by": ["reviewer1"],
+                "has_user_auto_approved": True,
+            },
+            {
+                "pr_key": "owner/repo#11",
+                "repo": "owner/repo",
+                "number": 11,
+                "title": "Frontend (Stacked on Backend)",
+                "author": "bob",
+                "base_ref": "feat-backend",
+                "head_ref": "feat-frontend",
+                "has_conflict": False,
+                "mergeable_state": "clean",
+                "checks_status": "PASSED",
+                "has_check_error": False,
+                "has_other_changes_requested": False,
+                "other_approved_by": ["reviewer2"],
+                "has_user_auto_approved": True,
+            }
+        ]
+
+        status = self.backend.get_annotated_status()
+        prs = status["pull_requests"]
+        p10 = next(p for p in prs if p["number"] == 10)
+        p11 = next(p for p in prs if p["number"] == 11)
+
+        # Parent PR 10: Root of stack, ready to merge
+        self.assertTrue(p10["is_stacked"])
+        self.assertTrue(p10["is_stack_root"])
+        self.assertFalse(p10["is_stack_blocked"])
+        self.assertTrue(p10["ready_to_merge"])
+
+        # Child PR 11: Stacked on #10, blocked from ready_to_merge
+        self.assertTrue(p11["is_stacked"])
+        self.assertFalse(p11["is_stack_root"])
+        self.assertTrue(p11["is_stack_blocked"])
+        self.assertEqual(p11["stack_parent_number"], 10)
+        self.assertTrue(p11["local_ready_to_merge"])
+        self.assertFalse(p11["ready_to_merge"])
+        self.assertTrue(p11["ready_to_merge_blocked_by_stack"])
+
     def test_author_text_approval_detection(self):
         """Verify author in-text approval (LGTM, approved, etc.) counts as approval."""
         client = GitHubClient(token="fake")

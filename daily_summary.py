@@ -9,6 +9,7 @@ import html
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional
+from pr_stacks import identify_pr_stacks
 
 logger = logging.getLogger("daily_summary")
 
@@ -86,6 +87,10 @@ def compute_pr_summary_status(pr: Dict[str, Any]) -> str:
     if status_badge in ("COMMENTS_POSTED", "CHANGES_REQUESTED") or has_other_changes or user_review_state == "CHANGES_REQUESTED":
         return "Needs Work"
 
+    # If blocked by stack parent, this PR cannot be merged yet
+    if pr.get("is_stack_blocked"):
+        return "Needs Work"
+
     ready_to_merge = bool(pr.get("ready_to_merge", False))
     has_user_auto_approved = bool(pr.get("has_user_auto_approved", False))
     has_user_manually_approved = bool(pr.get("has_user_manually_approved", False))
@@ -117,6 +122,9 @@ def generate_daily_summary(
     today_date = now.strftime("%Y-%m-%d")
 
     raw_prs = annotated_status.get("pull_requests", [])
+    if raw_prs and not any("is_stacked" in p for p in raw_prs if isinstance(p, dict)):
+        raw_prs = identify_pr_stacks(raw_prs)
+
     open_prs: List[Dict[str, Any]] = []
 
     for pr in raw_prs:
@@ -153,6 +161,16 @@ def generate_daily_summary(
             "checks_status": pr.get("checks_status"),
             "failed_checks": pr.get("failed_checks", []),
             "ready_to_merge": (summary_status == "Ready to Merge"),
+            "is_stacked": bool(pr.get("is_stacked", False)),
+            "is_stack_root": bool(pr.get("is_stack_root", False)),
+            "is_stack_blocked": bool(pr.get("is_stack_blocked", False)),
+            "stack_position": pr.get("stack_position", 1),
+            "stack_total": pr.get("stack_total", 1),
+            "stack_parent_number": pr.get("stack_parent_number"),
+            "stack_parent_title": pr.get("stack_parent_title", ""),
+            "stack_children_numbers": pr.get("stack_children_numbers", []),
+            "stack_label": pr.get("stack_label", ""),
+            "stack_block_reason": pr.get("stack_block_reason", ""),
             "report_file": pr.get("report_file", ""),
             "is_own_pr": bool(pr.get("is_own_pr", False)),
         })
@@ -345,6 +363,12 @@ def format_markdown_open_prs(open_prs: List[Dict[str, Any]]) -> str:
             updated = f"{p.get('updated_at_relative', '')} <br><sub>`{p.get('updated_at_friendly', '')}`</sub>"
             raw_st = p.get("summary_status") or p.get("status_label") or "Not Reviewed"
             st_formatted = STATUS_EMOJIS.get(raw_st, f"`{raw_st}`")
+            if p.get("is_stacked"):
+                if p.get("is_stack_root"):
+                    stack_note = f" <br><sub>📚 Stack 1/{p.get('stack_total', 1)} (Root)</sub>"
+                else:
+                    stack_note = f" <br><sub>📚 Stack {p.get('stack_position', 1)}/{p.get('stack_total', 1)} (on #{p.get('stack_parent_number')})</sub>"
+                title = f"{title}{stack_note}"
             lines.append(f"| {key}: {title} | `{repo}` | {author} | {created} | {updated} | {st_formatted} |")
         lines.append("")
     else:
@@ -535,10 +559,18 @@ def format_html_summary(summary_data: Dict[str, Any]) -> str:
     # Open PRs Rows
     open_rows = ""
     for p in open_prs:
+        stack_badge_html = ""
+        if p.get("is_stacked"):
+            if p.get("is_stack_root"):
+                stack_badge_html = f'<div style="margin-top: 0.25rem;"><span class="badge badge-purple" style="font-size: 0.68rem;">📚 Stack 1/{esc(p.get("stack_total"))} (Root)</span></div>'
+            else:
+                stack_badge_html = f'<div style="margin-top: 0.25rem;"><span class="badge badge-purple" style="font-size: 0.68rem;">📚 Stack {esc(p.get("stack_position"))}/{esc(p.get("stack_total"))} (on #{esc(p.get("stack_parent_number"))})</span></div>'
+
         open_rows += f"""
         <tr>
             <td>
                 <a href="{esc(p.get('html_url'))}" target="_blank" class="pr-link"><strong>#{esc(p.get('number'))}</strong>: {esc(p.get('title'))}</a>
+                {stack_badge_html}
             </td>
             <td><code>{esc(p.get('repo'))}</code></td>
             <td>@{esc(p.get('author'))}</td>

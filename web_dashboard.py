@@ -18,6 +18,7 @@ from auto_review_prs import AutoReviewEngine, DEFAULT_REVIEWS_DIR
 from repository_management import RepositoryManagementService
 from review_management import ReviewManagementService
 from daily_summary import generate_daily_summary, format_markdown_summary, format_html_summary
+from pr_stacks import identify_pr_stacks
 
 logger = logging.getLogger("dashboard")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -448,9 +449,13 @@ class DashboardBackend:
                 and checks_passed
             )
             item["ready_to_merge"] = is_ready_to_merge
+            item["local_ready_to_merge"] = is_ready_to_merge
             annotated_prs.append(item)
 
-        # Sort PRs: Main > Staging > Develop > others, then by creation date descending
+        # Smart stack detection: identify stacked PRs and block downstream PRs until parent merges
+        annotated_prs = identify_pr_stacks(annotated_prs)
+
+        # Sort PRs: Main > Staging > Develop > others, then by stack position and creation date descending
         def get_bucket(p):
             b = (p.get("base_ref") or "").strip().lower()
             if b in ("main", "master"): return 0
@@ -469,6 +474,7 @@ class DashboardBackend:
 
         annotated_prs.sort(key=lambda p: (
             get_bucket(p),
+            p.get("stack_position", 1),
             -get_created_timestamp(p)
         ))
 

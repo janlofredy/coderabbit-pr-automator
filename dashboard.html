@@ -1985,6 +1985,15 @@
                     pills.push(`<span class="badge badge-yellow" title="GitHub is calculating mergeability">⏳ Checking Conflicts</span>`);
                 }
 
+                // 9. Stack Status Pill
+                if (pr.is_stacked) {
+                    if (pr.is_stack_root) {
+                        pills.push(`<span class="badge badge-purple" title="Stack Root: Blocks #${(pr.stack_children_numbers || []).join(', #')}">📚 Stack 1/${pr.stack_total || 1} (Root)</span>`);
+                    } else {
+                        pills.push(`<span class="badge badge-purple" title="Stacked on #${pr.stack_parent_number}">📚 Stack ${pr.stack_position || 2}/${pr.stack_total || 2} (on #${pr.stack_parent_number})</span>`);
+                    }
+                }
+
                 const baseBranchUpper = (pr.base_ref || '').trim().toUpperCase();
 
                 return `
@@ -1993,7 +2002,12 @@
                         ${pr.ready_to_merge ? `
                         <div class="ready-to-merge-banner">
                             <span class="rtm-title">🚀 READY TO MERGE</span>
-                            <span class="rtm-sub">${pr.total_approvals || 2}+ Approvals • Checks Passed</span>
+                            <span class="rtm-sub">${pr.total_approvals || 2}+ Approvals • Checks Passed${pr.is_stack_root ? ` • Stack 1 of ${pr.stack_total} (Blocks #${(pr.stack_children_numbers || []).join(', #')})` : ''}</span>
+                        </div>
+                        ` : pr.is_stack_blocked ? `
+                        <div class="ready-to-merge-banner" style="background: linear-gradient(135deg, rgba(168, 85, 247, 0.15) 0%, rgba(99, 102, 241, 0.15) 100%); border-color: rgba(168, 85, 247, 0.4);">
+                            <span class="rtm-title" style="color: #c084fc;">📚 BLOCKED BY STACK PARENT #${pr.stack_parent_number}</span>
+                            <span class="rtm-sub" style="color: #e9d5ff;">${pr.local_ready_to_merge ? 'Approved locally • ' : ''}Waiting for parent PR #${pr.stack_parent_number} to merge first</span>
                         </div>
                         ` : ''}
                         <div class="pr-card-header">
@@ -3189,12 +3203,21 @@
                             <tbody>
                                 ${openPrs.map(p => {
                                     const statusVal = p.summary_status || p.status || 'Not Reviewed';
+                                    let stackBadgeHtml = '';
+                                    if (p.is_stacked) {
+                                        if (p.is_stack_root) {
+                                            stackBadgeHtml = `<div style="margin-top: 0.25rem;"><span class="badge badge-purple" style="font-size: 0.68rem;" title="Stack Root: Blocks #${(p.stack_children_numbers || []).join(', #')}">📚 Stack 1/${p.stack_total || 1} (Root)</span></div>`;
+                                        } else {
+                                            stackBadgeHtml = `<div style="margin-top: 0.25rem;"><span class="badge badge-purple" style="font-size: 0.68rem;" title="Blocked by stack parent #${p.stack_parent_number}">📚 Stack ${p.stack_position || 2}/${p.stack_total || 2} (on #${p.stack_parent_number})</span></div>`;
+                                        }
+                                    }
                                     return `
                                         <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
                                             <td style="padding: 0.55rem 0.6rem; max-width: 280px;">
                                                 <a href="${escapeHtml(p.html_url || '#')}" target="_blank" style="color: #60a5fa; font-weight: 600; text-decoration: none;">
                                                     #${escapeHtml(p.number)}: ${escapeHtml(p.title)}
                                                 </a>
+                                                ${stackBadgeHtml}
                                             </td>
                                             <td style="padding: 0.55rem 0.6rem; color: var(--text-muted); font-size: 0.78rem;">
                                                 <code>${escapeHtml(p.repo)}</code>

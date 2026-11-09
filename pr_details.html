@@ -818,7 +818,14 @@
                     rtmContainer.innerHTML = `
                     <div class="ready-to-merge-banner">
                         <span class="rtm-title">🚀 READY TO MERGE</span>
-                        <span class="rtm-sub">${pr.total_approvals || 2}+ Approvals • Checks Passed</span>
+                        <span class="rtm-sub">${pr.total_approvals || 2}+ Approvals • Checks Passed${pr.is_stack_root ? ` • Stack 1 of ${pr.stack_total} (Blocks #${(pr.stack_children_numbers || []).join(', #')})` : ''}</span>
+                    </div>`;
+                    rtmContainer.style.display = 'block';
+                } else if (pr.is_stack_blocked) {
+                    rtmContainer.innerHTML = `
+                    <div class="ready-to-merge-banner" style="background: linear-gradient(135deg, rgba(168, 85, 247, 0.15) 0%, rgba(99, 102, 241, 0.15) 100%); border-color: rgba(168, 85, 247, 0.4);">
+                        <span class="rtm-title" style="color: #c084fc;">📚 BLOCKED BY STACK PARENT #${pr.stack_parent_number}</span>
+                        <span class="rtm-sub" style="color: #e9d5ff;">${pr.local_ready_to_merge ? 'Approved locally • ' : ''}Waiting for parent PR #${pr.stack_parent_number} to merge first</span>
                     </div>`;
                     rtmContainer.style.display = 'block';
                 } else {
@@ -886,6 +893,15 @@
                 pills.push(`<span class="badge badge-red" title="This pull request has merge conflicts that must be resolved">⚠️ Merge Conflict</span>`);
             } else if (mergeState === 'unknown') {
                 pills.push(`<span class="badge badge-yellow" title="GitHub is calculating mergeability">⏳ Checking Conflicts</span>`);
+            }
+
+            // 9. Stack Status Pill
+            if (pr.is_stacked) {
+                if (pr.is_stack_root) {
+                    pills.push(`<span class="badge badge-purple" title="Stack Root: Blocks #${(pr.stack_children_numbers || []).join(', #')}">📚 Stack 1/${pr.stack_total || 1} (Root)</span>`);
+                } else {
+                    pills.push(`<span class="badge badge-purple" title="Stacked on #${pr.stack_parent_number}">📚 Stack ${pr.stack_position || 2}/${pr.stack_total || 2} (on #${pr.stack_parent_number})</span>`);
+                }
             }
 
             const description = pr.status_description
