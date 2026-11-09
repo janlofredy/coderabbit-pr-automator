@@ -2030,9 +2030,9 @@
         }
 
         function escapeHtml(text) {
-            if (!text) return '';
+            if (text === null || text === undefined) return '';
             const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
-            return text.replace(/[&<>"']/g, m => map[m]);
+            return String(text).replace(/[&<>"']/g, m => map[m]);
         }
 
         function formatDate(isoStr) {
@@ -3002,8 +3002,8 @@
                 for (const snap of snapshots) {
                     const opt = document.createElement('option');
                     opt.value = snap.id;
-                    const dateStr = snap.date || (snap.created_at ? snap.created_at.slice(0, 10) : 'Snapshot');
-                    const friendlyTime = snap.created_at_friendly || (snap.created_at ? snap.created_at.replace('T', ' ').slice(0, 19) : '');
+                    const dateStr = snap.date || (snap.created_at ? String(snap.created_at).slice(0, 10) : 'Snapshot');
+                    const friendlyTime = snap.created_at_friendly || (snap.created_at ? String(snap.created_at).replace('T', ' ').slice(0, 19) : '');
                     opt.textContent = `📁 ${dateStr} Snapshot (${friendlyTime || snap.id})`;
                     select.appendChild(opt);
                 }
