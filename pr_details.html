@@ -708,6 +708,47 @@
             }, 4000);
         }
 
+        async function copyTextToClipboard(text) {
+            if (navigator.clipboard && window.isSecureContext) {
+                try {
+                    await navigator.clipboard.writeText(text);
+                    return true;
+                } catch (err) {
+                    console.warn("navigator.clipboard.writeText failed, using fallback:", err);
+                }
+            }
+
+            // Fallback for HTTP / non-secure contexts (e.g. LAN IP access in CasaOS)
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.style.position = 'fixed';
+            textarea.style.top = '0';
+            textarea.style.left = '0';
+            textarea.style.width = '2em';
+            textarea.style.height = '2em';
+            textarea.style.padding = '0';
+            textarea.style.border = 'none';
+            textarea.style.outline = 'none';
+            textarea.style.boxShadow = 'none';
+            textarea.style.background = 'transparent';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.focus();
+            textarea.select();
+
+            try {
+                const successful = document.execCommand('copy');
+                document.body.removeChild(textarea);
+                if (!successful) throw new Error("Copy command unsuccessful");
+                return true;
+            } catch (err) {
+                if (document.body.contains(textarea)) {
+                    document.body.removeChild(textarea);
+                }
+                throw err;
+            }
+        }
+
         function escapeHtml(text) {
             if (!text) return '';
             const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
@@ -1050,7 +1091,7 @@
         function copyCurrentLog() {
             const term = document.getElementById('terminal-log-body');
             if (!term || !term.textContent) return;
-            navigator.clipboard.writeText(term.textContent).then(() => {
+            copyTextToClipboard(term.textContent).then(() => {
                 showToast("Terminal logs copied to clipboard!", "success");
             }).catch(() => {
                 showToast("Could not copy logs to clipboard", "error");
