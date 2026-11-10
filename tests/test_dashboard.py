@@ -1008,7 +1008,79 @@ class TestDashboardBackend(unittest.TestCase):
         )
         self.assertFalse(summary_regular["author_approved_in_text"])
         self.assertNotIn("dev_author", summary_regular["other_approved_by"])
-        self.assertIn("dev_author", summary_regular["other_commented_by"])
+        self.assertNotIn("dev_author", summary_regular["other_commented_by"])
+        self.assertFalse(summary_regular["has_other_commented"])
+
+    def test_developer_reply_to_comment_not_treated_as_review(self):
+        """Verify that a developer's reply to a comment is not treated as a review or reviewer comment."""
+        client = GitHubClient(token="fake")
+
+        # Developer (author) replies to an inline comment thread; GitHub creates a COMMENTED review
+        client.get_reviews_for_pr = MagicMock(return_value=[
+            {
+                "id": 201,
+                "user": {"login": "developer_author"},
+                "state": "COMMENTED",
+                "body": "Fixed in latest commit, thanks!",
+                "commit_id": "sha123"
+            }
+        ])
+        # Developer also comments in PR conversation
+        client.get_comments_for_pr = MagicMock(return_value=[
+            {
+                "user": {"login": "developer_author"},
+                "body": "Updated the implementation as discussed."
+            }
+        ])
+        client.get_check_runs_summary = MagicMock(return_value={"has_check_error": False, "failed_checks": [], "checks_status": "PASSED"})
+        client.get_pr_mergeable_status = MagicMock(return_value={"has_conflict": False, "mergeable_state": "clean"})
+
+        summary = client.get_pr_review_summary(
+            owner="owner",
+            repo="repo",
+            pr_number=10,
+            commit_sha="sha123",
+            auth_user="bot_account",
+            pr_author="developer_author"
+        )
+
+        # Developer's replies must not be treated as a review or reviewer comment
+        self.assertNotIn("developer_author", summary["other_commented_by"])
+        self.assertNotIn("developer_author", summary["other_approved_by"])
+        self.assertFalse(summary["has_other_commented"])
+        self.assertFalse(summary["has_other_changes_requested"])
+        self.assertFalse(summary["has_user_reviewed"])
+
+    def test_manual_user_comment_reply_not_treated_as_coderabbit_review(self):
+        """Verify that a manual reply from the authenticated bot account is not treated as an automated review."""
+        client = GitHubClient(token="fake")
+
+        # Authenticated account manually replies to an inline comment thread (no CodeRabbit signature)
+        client.get_reviews_for_pr = MagicMock(return_value=[
+            {
+                "id": 202,
+                "user": {"login": "bot_account"},
+                "state": "COMMENTED",
+                "body": "Good point, looks reasonable.",
+                "commit_id": "sha123"
+            }
+        ])
+        client.get_comments_for_pr = MagicMock(return_value=[])
+        client.get_check_runs_summary = MagicMock(return_value={"has_check_error": False, "failed_checks": [], "checks_status": "PASSED"})
+        client.get_pr_mergeable_status = MagicMock(return_value={"has_conflict": False, "mergeable_state": "clean"})
+
+        summary = client.get_pr_review_summary(
+            owner="owner",
+            repo="repo",
+            pr_number=10,
+            commit_sha="sha123",
+            auth_user="bot_account",
+            pr_author="developer_author"
+        )
+
+        self.assertFalse(summary["has_user_reviewed"])
+        self.assertIsNone(summary["user_review_state"])
+        self.assertFalse(summary["has_user_auto_approved"])
 
     def test_dashboard_and_pr_details_ready_to_merge_banner(self):
         """Verify dashboard.html and pr_details.html contain READY TO MERGE banner styles and elements."""

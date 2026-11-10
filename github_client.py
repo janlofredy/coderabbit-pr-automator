@@ -547,6 +547,9 @@ class GitHubClient:
                 if not reviewer:
                     continue
                 rev_key = reviewer.lower()
+                # A developer (PR author) replying to a comment is not a review
+                if author_lower and rev_key == author_lower:
+                    continue
                 latest_by_reviewer[rev_key] = r
                 state = (r.get("state") or "").upper()
                 if state in ("APPROVED", "CHANGES_REQUESTED"):
@@ -571,14 +574,6 @@ class GitHubClient:
                 commit_matched = bool(not commit_sha or r_commit == commit_sha or (short_sha and r_commit.startswith(short_sha)))
                 is_cr_auto = ("🐰" in body) or ("CodeRabbit" in body)
 
-                if author_lower and rev_lower == author_lower:
-                    if AUTHOR_APPROVAL_PATTERN.search(body):
-                        author_text_approved = True
-                        if reviewer_login not in other_approved:
-                            other_approved.append(reviewer_login)
-                        if not commit_matched and reviewer_login not in outdated_approvals:
-                            outdated_approvals.append(reviewer_login)
-
                 if user and rev_lower == user:
                     if state == "APPROVED":
                         if is_cr_auto:
@@ -595,7 +590,7 @@ class GitHubClient:
                             has_user_reviewed = True
                             user_review_state = "CHANGES_REQUESTED"
                     elif state == "COMMENTED":
-                        if commit_matched:
+                        if commit_matched and is_cr_auto:
                             has_user_reviewed = True
                             outcome = "COMMENTED"
                             if "NEEDS_WORK" in body:
@@ -656,7 +651,7 @@ class GitHubClient:
                         author_text_approved = True
                         if c_user not in other_approved:
                             other_approved.append(c_user)
-                        continue
+                    continue
 
                 other_commented.add(c_user)
         except Exception as e:
@@ -668,8 +663,8 @@ class GitHubClient:
             if u.lower() not in [a.lower() for a in other_approved]
             and u.lower() not in [c.lower() for c in other_changes_requested]
         }
-        # If author approved in text, ensure author is listed in approvals and not comments
-        if author_text_approved and author_lower:
+        # The PR author is the developer, never an other reviewer/commenter
+        if author_lower:
             other_commented = {u for u in other_commented if u.lower() != author_lower}
 
         # Check CI check runs for errors and status
