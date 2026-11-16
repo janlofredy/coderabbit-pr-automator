@@ -5,6 +5,7 @@ import time
 import logging
 from datetime import datetime, timezone
 from typing import Dict, Any, Tuple, Optional, List
+from timezone_utils import now_app_tz, parse_iso_datetime
 
 logger = logging.getLogger("state_manager")
 
@@ -322,7 +323,7 @@ class StateManager:
     def record_pr_status(self, pr_key: str, status_info: Dict[str, Any]) -> None:
         state = self.load_state()
         statuses = state.get("pr_statuses", {})
-        status_info["updated_at"] = datetime.now(timezone.utc).isoformat()
+        status_info["updated_at"] = now_app_tz().isoformat()
         statuses[pr_key] = status_info
         state["pr_statuses"] = statuses
         self.save_state(state)
@@ -337,7 +338,7 @@ class StateManager:
 
     def record_last_run(self, timestamp: Optional[str] = None) -> None:
         state = self.load_state()
-        state["last_run_timestamp"] = timestamp or datetime.now(timezone.utc).isoformat()
+        state["last_run_timestamp"] = timestamp or now_app_tz().isoformat()
         self.save_state(state)
 
     def get_last_run(self) -> str:
@@ -355,7 +356,7 @@ class StateManager:
             if pr_key not in pr_logs:
                 pr_logs[pr_key] = []
 
-            now = datetime.now(timezone.utc)
+            now = now_app_tz()
             log_id = log_entry.get("log_id") or f"{int(now.timestamp() * 1000000)}_{pr_key.replace('/', '_').replace('#', '_')}"
             log_entry["log_id"] = log_id
             if "timestamp" not in log_entry:
@@ -408,7 +409,7 @@ class StateManager:
             if acc_id not in account_logs or not isinstance(account_logs[acc_id], list):
                 account_logs[acc_id] = []
 
-            now = datetime.now(timezone.utc)
+            now = now_app_tz()
             log_id = log_entry.get("log_id") or f"{int(now.timestamp() * 1000000)}_acc_{acc_id}"
             entry = dict(log_entry)
             entry["log_id"] = log_id
@@ -640,7 +641,7 @@ class StateManager:
             state = self.load_state()
             snapshots = list(state.get("daily_snapshots", []))
 
-            now = datetime.now(timezone.utc)
+            now = now_app_tz()
             snap_id = snapshot.get("id") or f"snap_{int(now.timestamp())}_{uuid.uuid4().hex[:6]}"
             snap_date = snapshot.get("date") or now.strftime("%Y-%m-%d")
 
@@ -696,7 +697,7 @@ class StateManager:
         """
         with self._lock:
             state = self.load_state()
-            now = datetime.now(timezone.utc)
+            now = now_app_tz()
             cutoff_seconds = hours * 3600
 
             recent = []
@@ -717,16 +718,15 @@ class StateManager:
                     if not ts_str:
                         continue
                     try:
-                        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-                        if ts.tzinfo is None:
-                            ts = ts.replace(tzinfo=timezone.utc)
-                        delta = (now - ts).total_seconds()
-                        if 0 <= delta <= cutoff_seconds:
-                            recent_entry = dict(entry)
-                            recent_entry.setdefault("pr_key", pr_key)
-                            recent.append(recent_entry)
-                            if log_id:
-                                seen_ids.add(log_id)
+                        ts = parse_iso_datetime(ts_str)
+                        if ts:
+                            delta = (now - ts).total_seconds()
+                            if 0 <= delta <= cutoff_seconds:
+                                recent_entry = dict(entry)
+                                recent_entry.setdefault("pr_key", pr_key)
+                                recent.append(recent_entry)
+                                if log_id:
+                                    seen_ids.add(log_id)
                     except Exception:
                         pass
 
@@ -745,16 +745,15 @@ class StateManager:
                     if not ts_str:
                         continue
                     try:
-                        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-                        if ts.tzinfo is None:
-                            ts = ts.replace(tzinfo=timezone.utc)
-                        delta = (now - ts).total_seconds()
-                        if 0 <= delta <= cutoff_seconds:
-                            recent_entry = dict(entry)
-                            recent_entry.setdefault("account_id", acc_id)
-                            recent.append(recent_entry)
-                            if log_id:
-                                seen_ids.add(log_id)
+                        ts = parse_iso_datetime(ts_str)
+                        if ts:
+                            delta = (now - ts).total_seconds()
+                            if 0 <= delta <= cutoff_seconds:
+                                recent_entry = dict(entry)
+                                recent_entry.setdefault("account_id", acc_id)
+                                recent.append(recent_entry)
+                                if log_id:
+                                    seen_ids.add(log_id)
                     except Exception:
                         pass
 
@@ -815,7 +814,7 @@ class StateManager:
         """
         with self._lock:
             state = self.load_state()
-            now = datetime.now(timezone.utc)
+            now = now_app_tz()
             all_entries = []
             seen_ids = set()
 
@@ -966,12 +965,11 @@ class StateManager:
                         if not ts_str:
                             continue
                         try:
-                            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-                            if ts.tzinfo is None:
-                                ts = ts.replace(tzinfo=timezone.utc)
-                            delta = (now - ts).total_seconds()
-                            if 0 <= delta <= cutoff_sec:
-                                time_filtered.append(e)
+                            ts = parse_iso_datetime(ts_str)
+                            if ts:
+                                delta = (now - ts).total_seconds()
+                                if 0 <= delta <= cutoff_sec:
+                                    time_filtered.append(e)
                         except Exception:
                             pass
                     filtered = time_filtered
@@ -1026,8 +1024,8 @@ class StateManager:
                 def _get_sort_time(entry: Dict[str, Any]) -> float:
                     ts_str = entry.get("timestamp") or ""
                     try:
-                        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-                        return ts.timestamp()
+                        ts = parse_iso_datetime(ts_str)
+                        return ts.timestamp() if ts else 0.0
                     except Exception:
                         return 0.0
 

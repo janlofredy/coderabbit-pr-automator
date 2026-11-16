@@ -17,6 +17,7 @@ from daily_summary import (
     format_friendly_datetime,
     parse_iso_datetime
 )
+from timezone_utils import now_app_tz
 from web_dashboard import DashboardBackend, DashboardRequestHandler
 
 
@@ -445,7 +446,7 @@ class TestDailySummaryEngine(unittest.TestCase):
             self.assertEqual(len(backend.state_manager.get_daily_snapshots()), 1)
 
             # Schedule checking
-            backend.config_manager.update_settings({"daily_summary_enabled": True, "daily_summary_time": datetime.now().strftime("%H:%M")})
+            backend.config_manager.update_settings({"daily_summary_enabled": True, "daily_summary_time": now_app_tz().strftime("%H:%M")})
             backend._check_daily_snapshot_schedule()
             # Already exists for today, so snapshot count remains 1
             self.assertEqual(len(backend.state_manager.get_daily_snapshots()), 1)

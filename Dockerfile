@@ -5,6 +5,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     CI=1 \
+    TZ=Asia/Manila \
     CODERABBIT_INSTALL_DIR=/usr/local/bin \
     CONFIG_DIR=/app/data/config \
     REVIEWS_DIR=/app/data/reviews \
@@ -20,6 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libsecret-1-0 \
     procps \
+    tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 # Install official CodeRabbit CLI to /usr/local/bin

@@ -142,6 +142,7 @@ If no accounts are configured in the dashboard, the application automatically us
 
 | Variable | Description | Default |
 | :--- | :--- | :--- |
+| `TZ` | Timezone for timestamps, daily summary scheduling, and review reports (e.g. `Asia/Manila`, `UTC`) | `Asia/Manila` |
 | `GITHUB_TOKEN` | Legacy GitHub token automatically migrated to persistent settings; new setups should use the dashboard Settings | Optional |
 | `CODERABBIT_CLI_HOME` | Host path containing the authenticated CodeRabbit CLI state mounted by Docker Compose | `${HOME}/.coderabbit` |
 

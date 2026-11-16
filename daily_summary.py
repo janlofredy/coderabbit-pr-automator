@@ -10,55 +10,16 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional
 from pr_stacks import identify_pr_stacks
+from timezone_utils import (
+    get_app_timezone,
+    now_app_tz,
+    to_app_tz,
+    parse_iso_datetime,
+    format_friendly_datetime,
+    format_relative_time,
+)
 
 logger = logging.getLogger("daily_summary")
-
-
-def parse_iso_datetime(dt_str: Optional[str]) -> Optional[datetime]:
-    """Safely parses an ISO datetime string into a timezone-aware UTC datetime."""
-    if not dt_str or not isinstance(dt_str, str):
-        return None
-    try:
-        clean = dt_str.replace("Z", "+00:00")
-        dt = datetime.fromisoformat(clean)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc)
-    except Exception:
-        return None
-
-
-def format_relative_time(dt_str: Optional[str], now: Optional[datetime] = None) -> str:
-    """Formats an ISO timestamp into a human-friendly relative string."""
-    dt = parse_iso_datetime(dt_str)
-    if not dt:
-        return "Unknown"
-    now = now or datetime.now(timezone.utc)
-    diff = int((now - dt).total_seconds())
-
-    if diff < 0:
-        return "Just now"
-    if diff < 60:
-        return f"{diff}s ago"
-    if diff < 3600:
-        return f"{diff // 60}m ago"
-    if diff < 86400:
-        hours = diff // 3600
-        return f"{hours}h ago"
-    days = diff // 86400
-    if days == 1:
-        return "Yesterday"
-    if days < 30:
-        return f"{days}d ago"
-    return dt.strftime("%Y-%m-%d")
-
-
-def format_friendly_datetime(dt_str: Optional[str]) -> str:
-    """Formats an ISO timestamp into 'YYYY-MM-DD HH:MM UTC'."""
-    dt = parse_iso_datetime(dt_str)
-    if not dt:
-        return "Unknown"
-    return dt.strftime("%Y-%m-%d %H:%M UTC")
 
 
 def compute_pr_summary_status(pr: Dict[str, Any]) -> str:
@@ -131,7 +92,7 @@ def generate_daily_summary(
     - 24-hour automated review activity
     - Repository health breakdown
     """
-    now = datetime.now(timezone.utc)
+    now = now_app_tz()
     cutoff = now - timedelta(hours=hours)
     cutoff_iso = cutoff.isoformat()
     today_date = now.strftime("%Y-%m-%d")
@@ -491,7 +452,7 @@ def format_markdown_summary(summary_data: Dict[str, Any], group: Optional[str] =
     elif group in ("repositories", "repos"):
         return format_markdown_repositories(repos)
 
-    date_str = summary_data.get("date", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    date_str = summary_data.get("date", now_app_tz().strftime("%Y-%m-%d"))
     gen_at = summary_data.get("generated_at_friendly", "Just now")
     metrics = summary_data.get("metrics", {})
 
@@ -531,7 +492,7 @@ def format_markdown_summary(summary_data: Dict[str, Any], group: Optional[str] =
 
 def format_html_summary(summary_data: Dict[str, Any]) -> str:
     """Formats the daily summary into a standalone styled HTML report."""
-    date_str = summary_data.get("date", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    date_str = summary_data.get("date", now_app_tz().strftime("%Y-%m-%d"))
     gen_at = summary_data.get("generated_at_friendly", "Just now")
     metrics = summary_data.get("metrics", {})
     open_prs = summary_data.get("open_prs", [])

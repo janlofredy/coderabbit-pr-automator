@@ -4,6 +4,7 @@ set -e
 echo "=========================================================="
 echo "  🐰 CodeRabbit PR Auto-Reviewer for CasaOS & Docker"
 echo "=========================================================="
+echo "🌐 Timezone: ${TZ:-Asia/Manila}"
 
 # Ensure directories exist
 mkdir -p /app/data/config/accounts /app/data/reviews /app/data/repos

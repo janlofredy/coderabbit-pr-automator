@@ -13,6 +13,7 @@ services:
     environment:
       # Optional legacy import; new tokens are saved from the dashboard.
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - TZ=${TZ:-Asia/Manila}
     volumes:
       - ./data/config:/app/data/config
       - ./data/reviews:/app/data/reviews

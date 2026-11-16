@@ -7,6 +7,8 @@ from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Iterator
 
+from timezone_utils import now_app_tz
+
 from config_manager import ConfigManager
 from github_client import GitHubClient
 
@@ -414,7 +416,7 @@ class RepositoryManagementService:
                 "head_sha": head_sha,
                 "base_ref": pr.get("base_ref", "main"),
                 "force": bool(force),
-                "queued_at": datetime.now(timezone.utc).isoformat(),
+                "queued_at": now_app_tz().isoformat(),
             }
             if state_manager.enqueue_review_job(job, to_front=False):
                 enqueued_count += 1

@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
 
+from timezone_utils import now_app_tz
+
 from auto_review_prs import AutoReviewEngine
 from config_manager import ConfigManager
 from github_client import GitHubClient
@@ -232,7 +234,7 @@ class ReviewManagementService:
                 "number": pr_number,
                 "head_sha": head_sha or "",
                 "force": bool(force),
-                "queued_at": datetime.now(timezone.utc).isoformat(),
+                "queued_at": now_app_tz().isoformat(),
             }
             if to_front:
                 self._review_queue.appendleft(item)

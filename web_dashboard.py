@@ -11,6 +11,8 @@ from socketserver import ThreadingMixIn
 from typing import Dict, Any, List, Optional
 from urllib.parse import urlparse, parse_qs
 
+from timezone_utils import now_app_tz, parse_iso_datetime, get_app_timezone_name
+
 from config_manager import ConfigManager, safe_int_env
 from state_manager import StateManager
 from github_client import GitHubClient
@@ -468,7 +470,8 @@ class DashboardBackend:
             if not created_str:
                 return 0.0
             try:
-                return datetime.fromisoformat(created_str.replace("Z", "+00:00")).timestamp()
+                ts = parse_iso_datetime(created_str)
+                return ts.timestamp() if ts else 0.0
             except Exception:
                 return 0.0
 
@@ -483,6 +486,7 @@ class DashboardBackend:
             "service_enabled": config.get("service_enabled", True),
             "strict_approval": config.get("strict_approval", True),
             "last_run": state.get("last_run_timestamp", ""),
+            "timezone": get_app_timezone_name(),
             "total_reviews_count": self.state_manager.get_total_reviews_count(),
             "rate_limited": is_rate_limited,
             "rate_limit_expires_at": state.get("rate_limit_expires_at", 0),
@@ -616,7 +620,7 @@ class DashboardBackend:
             if not self.config_manager.is_daily_summary_enabled():
                 return
             sched_time = self.config_manager.get_daily_summary_time()
-            now = datetime.now()
+            now = now_app_tz()
             current_time_str = now.strftime("%H:%M")
             today_date = now.strftime("%Y-%m-%d")
 
@@ -923,7 +927,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             else:
                 data = backend.get_daily_summary()
 
-            date_tag = data.get("date", datetime.now().strftime("%Y-%m-%d"))
+            date_tag = data.get("date", now_app_tz().strftime("%Y-%m-%d"))
             if fmt == "html":
                 rendered = format_html_summary(data).encode("utf-8")
                 self.send_response(200)

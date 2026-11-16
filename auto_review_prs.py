@@ -7,6 +7,8 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional, Tuple
 
+from timezone_utils import now_app_tz, get_app_timezone_name
+
 from config_manager import ConfigManager, safe_int_env
 from state_manager import StateManager
 from github_client import GitHubClient, GitHubAPIException
@@ -482,6 +484,10 @@ class AutoReviewEngine:
             </div>
             """
 
+        now = now_app_tz()
+        tz_label = now.strftime("%Z") or get_app_timezone_name()
+        generated_at_str = now.strftime(f"%Y-%m-%d %H:%M:%S {tz_label}")
+
         html_content = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -510,7 +516,7 @@ class AutoReviewEngine:
         <table class="meta-table">
             <tr><td><strong>Target Base Branch:</strong> {base_ref}</td><td><strong>Head Commit:</strong> <code>{commit_sha}</code></td></tr>
             <tr><td><strong>Head Branch:</strong> {head_ref}</td><td><strong>Outcome:</strong> <span class="badge {outcome.lower()}">{outcome}</span></td></tr>
-            <tr><td colspan="2"><strong>Generated At:</strong> {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</td></tr>
+            <tr><td colspan="2"><strong>Generated At:</strong> {generated_at_str}</td></tr>
         </table>
 
         <h3>Summary</h3>
@@ -720,7 +726,9 @@ class AutoReviewEngine:
         if retry_delay > 0 or is_timeout:
             delay_sec = retry_delay if retry_delay > 0 else 900
             mins = max(1, delay_sec // 60)
-            resume_time = (datetime.now(timezone.utc) + timedelta(seconds=delay_sec)).strftime("%H:%M:%S UTC")
+            now = now_app_tz()
+            tz_label = now.strftime("%Z") or get_app_timezone_name()
+            resume_time = (now + timedelta(seconds=delay_sec)).strftime(f"%H:%M:%S {tz_label}")
             reason_msg = f"CLI execution timeout ({self.cli_timeout}s)" if is_timeout else "Free Tier request quota / rate limit reached"
 
             logger.warning("CodeRabbit rate limit or timeout triggered on %s: delay %ds (%s)", pr_key, delay_sec, reason_msg)
