@@ -332,12 +332,36 @@ class GitHubClient:
         return self._request("GET", f"/repos/{owner}/{repo}/branches/{quoted_branch}")
 
     def get_reviews_for_pr(self, owner: str, repo: str, pr_number: int) -> List[Dict[str, Any]]:
-        """Retrieves reviews submitted on a pull request."""
-        return self._request("GET", f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews")
+        """Retrieves all reviews submitted on a pull request with pagination."""
+        all_reviews: List[Dict[str, Any]] = []
+        page = 1
+        while True:
+            reviews = self._request("GET", f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews?per_page=100&page={page}")
+            if not reviews or not isinstance(reviews, list):
+                break
+            all_reviews.extend(reviews)
+            if len(reviews) < 100:
+                break
+            page += 1
+            if page > 10:  # safety cap up to 1000 reviews
+                break
+        return all_reviews
 
     def get_comments_for_pr(self, owner: str, repo: str, pr_number: int) -> List[Dict[str, Any]]:
-        """Retrieves conversation issue comments on a pull request."""
-        return self._request("GET", f"/repos/{owner}/{repo}/issues/{pr_number}/comments?per_page=100")
+        """Retrieves conversation issue comments on a pull request with pagination."""
+        all_comments: List[Dict[str, Any]] = []
+        page = 1
+        while True:
+            comments = self._request("GET", f"/repos/{owner}/{repo}/issues/{pr_number}/comments?per_page=100&page={page}")
+            if not comments or not isinstance(comments, list):
+                break
+            all_comments.extend(comments)
+            if len(comments) < 100:
+                break
+            page += 1
+            if page > 10:  # safety cap up to 1000 comments
+                break
+        return all_comments
 
     def get_check_runs_summary(self, owner: str, repo: str, commit_sha: str) -> Dict[str, Any]:
         """
@@ -348,7 +372,7 @@ class GitHubClient:
         if not commit_sha:
             return {"has_check_error": False, "failed_checks": [], "checks_status": None}
         try:
-            res = self._request("GET", f"/repos/{owner}/{repo}/commits/{commit_sha}/check-runs")
+            res = self._request("GET", f"/repos/{owner}/{repo}/commits/{commit_sha}/check-runs?per_page=100")
             check_runs = res.get("check_runs", []) if isinstance(res, dict) else []
             failed = []
             ongoing = []
@@ -562,10 +586,31 @@ class GitHubClient:
             all_reviewers = set(latest_by_reviewer.keys()) | set(latest_decisive_by_reviewer.keys())
             for rev_lower in all_reviewers:
                 # Prioritize decisive review (APPROVED / CHANGES_REQUESTED) over subsequent advisory COMMENTED
-                if rev_lower in latest_decisive_by_reviewer:
-                    r = latest_decisive_by_reviewer[rev_lower]
+                # only if the decisive review is on the current PR commit or both reviews are on the same commit.
+                # If a reviewer submitted a subsequent review on a newer commit SHA, that newer review supersedes
+                # the older outdated approval/decision.
+                r_decisive = latest_decisive_by_reviewer.get(rev_lower)
+                r_latest = latest_by_reviewer.get(rev_lower)
+
+                if r_decisive and not r_latest:
+                    r = r_decisive
+                elif r_latest and not r_decisive:
+                    r = r_latest
                 else:
-                    r = latest_by_reviewer[rev_lower]
+                    dec_commit = (r_decisive.get("commit_id") or "").strip()
+                    lat_commit = (r_latest.get("commit_id") or "").strip()
+
+                    dec_matched = bool(commit_sha and (dec_commit == commit_sha or (short_sha and dec_commit.startswith(short_sha))))
+                    lat_matched = bool(commit_sha and (lat_commit == commit_sha or (short_sha and lat_commit.startswith(short_sha))))
+
+                    if dec_matched:
+                        r = r_decisive
+                    elif lat_matched:
+                        r = r_latest
+                    elif dec_commit != lat_commit:
+                        r = r_latest
+                    else:
+                        r = r_decisive
 
                 reviewer_login = (r.get("user") or {}).get("login") or rev_lower
                 state = (r.get("state") or "").upper()

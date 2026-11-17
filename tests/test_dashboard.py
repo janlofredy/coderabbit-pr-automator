@@ -1605,6 +1605,90 @@ class TestDashboardBackend(unittest.TestCase):
             self.assertEqual(res, {"success": True})
             self.assertEqual(attempt, 2)
 
+    def test_get_reviews_for_pr_pagination(self):
+        """Verify get_reviews_for_pr paginates through multiple pages until all reviews are returned."""
+        client = GitHubClient(token="fake-token")
+
+        page1 = [{"id": i, "state": "COMMENTED"} for i in range(100)]
+        page2 = [{"id": 100 + i, "state": "APPROVED"} for i in range(25)]
+
+        def fake_request(method, endpoint):
+            if endpoint.endswith("&page=1"):
+                return page1
+            elif endpoint.endswith("&page=2"):
+                return page2
+            return []
+
+        client._request = MagicMock(side_effect=fake_request)
+        reviews = client.get_reviews_for_pr("owner", "repo", 42)
+        self.assertEqual(len(reviews), 125)
+        self.assertEqual(client._request.call_count, 2)
+
+    def test_newer_review_supersedes_outdated_approval(self):
+        """Verify that when a reviewer previously approved an older commit, but subsequently
+        submitted a review on a newer commit (e.g. COMMENTED or CHANGES_REQUESTED), the current
+        review outcome is reported rather than the outdated approval."""
+        client = GitHubClient(token="fake-token")
+
+        # Reviewer1 approved sha_old, then commented on sha_current
+        # Reviewer2 approved sha_old, and has no review on sha_current (remains outdated approval)
+        # Reviewer3 approved sha_old, then requested changes on sha_current
+        client.get_reviews_for_pr = MagicMock(return_value=[
+            {"user": {"login": "reviewer1"}, "state": "APPROVED", "commit_id": "sha_old_111", "body": "looks fine"},
+            {"user": {"login": "reviewer1"}, "state": "COMMENTED", "commit_id": "sha_current_222", "body": "found a new issue"},
+            {"user": {"login": "reviewer2"}, "state": "APPROVED", "commit_id": "sha_old_111", "body": "great"},
+            {"user": {"login": "reviewer3"}, "state": "APPROVED", "commit_id": "sha_old_111", "body": "initial lgtm"},
+            {"user": {"login": "reviewer3"}, "state": "CHANGES_REQUESTED", "commit_id": "sha_current_222", "body": "must fix this"}
+        ])
+        client.get_comments_for_pr = MagicMock(return_value=[])
+        client.get_check_runs_summary = MagicMock(return_value={"has_check_error": False, "failed_checks": [], "checks_status": "PASSED"})
+        client.get_pr_mergeable_status = MagicMock(return_value={"has_conflict": False, "mergeable_state": "clean"})
+
+        summary = client.get_pr_review_summary(
+            owner="owner",
+            repo="repo",
+            pr_number=10,
+            commit_sha="sha_current_222",
+            auth_user="bot_account"
+        )
+
+        # Reviewer1 should be in other_commented_by, NOT other_approved_by or outdated_approvals_by
+        self.assertIn("reviewer1", summary["other_commented_by"])
+        self.assertNotIn("reviewer1", summary["other_approved_by"])
+        self.assertNotIn("reviewer1", summary["outdated_approvals_by"])
+
+        # Reviewer2 should remain in other_approved_by and outdated_approvals_by
+        self.assertIn("reviewer2", summary["other_approved_by"])
+        self.assertIn("reviewer2", summary["outdated_approvals_by"])
+
+        # Reviewer3 should be in other_changes_requested_by, NOT other_approved_by
+        self.assertIn("reviewer3", summary["other_changes_requested_by"])
+        self.assertNotIn("reviewer3", summary["other_approved_by"])
+        self.assertNotIn("reviewer3", summary["outdated_approvals_by"])
+
+    def test_decisive_review_prioritized_on_same_commit(self):
+        """Verify that if a reviewer approved and commented on the SAME commit, the approval is preserved."""
+        client = GitHubClient(token="fake-token")
+
+        client.get_reviews_for_pr = MagicMock(return_value=[
+            {"user": {"login": "reviewer1"}, "state": "APPROVED", "commit_id": "sha_current_222", "body": "approved"},
+            {"user": {"login": "reviewer1"}, "state": "COMMENTED", "commit_id": "sha_current_222", "body": "nit on line 10"}
+        ])
+        client.get_comments_for_pr = MagicMock(return_value=[])
+        client.get_check_runs_summary = MagicMock(return_value={"has_check_error": False, "failed_checks": [], "checks_status": "PASSED"})
+        client.get_pr_mergeable_status = MagicMock(return_value={"has_conflict": False, "mergeable_state": "clean"})
+
+        summary = client.get_pr_review_summary(
+            owner="owner",
+            repo="repo",
+            pr_number=11,
+            commit_sha="sha_current_222",
+            auth_user="bot_account"
+        )
+
+        self.assertIn("reviewer1", summary["other_approved_by"])
+        self.assertNotIn("reviewer1", summary["outdated_approvals_by"])
+
 if __name__ == "__main__":
     unittest.main()
 
