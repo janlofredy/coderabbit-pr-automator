@@ -1,9 +1,14 @@
 import os
+import io
 import re
+import copy
 import json
 import time
+import http.client
 import logging
+import threading
 import urllib.request
+import urllib.response
 import urllib.error
 import urllib.parse
 from typing import Dict, Any, List, Optional, Tuple
@@ -16,17 +21,120 @@ AUTHOR_APPROVAL_PATTERN = re.compile(
     r"(?i)\b(lgtm|looks\s+good(?:\s+to\s+merge)?|approved|ready\s+to\s+merge|self[- ]approved|go\s+ahead\s+and\s+merge)\b"
 )
 
-class GitHubClient:
-    """GitHub REST API Client using Python standard library."""
 
-    def __init__(self, token: Optional[str] = None):
+class KeepAliveHTTPSHandler(urllib.request.HTTPSHandler):
+    """Thread-local HTTP/1.1 keep-alive connection pool for urllib.request HTTPS calls."""
+
+    def __init__(self, debuglevel: int = 0, context: Any = None):
+        super().__init__(debuglevel=debuglevel, context=context)
+        self._tls = threading.local()
+
+    def _get_pool(self) -> Dict[Tuple[str, int], http.client.HTTPSConnection]:
+        pool = getattr(self._tls, "connections", None)
+        if pool is None:
+            pool = {}
+            self._tls.connections = pool
+        return pool
+
+    @staticmethod
+    def _close_conn(pool: Dict[Tuple[str, int], http.client.HTTPSConnection], key: Tuple[str, int]) -> None:
+        conn = pool.pop(key, None)
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def https_open(self, req: urllib.request.Request):
+        parsed = urllib.parse.urlsplit(req.full_url)
+        hostname = parsed.hostname
+        if not hostname or (req.host and req.host.split(":")[0].lower() != hostname.lower()):
+            # Proxy or non-standard host override: fall back to default urllib handler
+            return super().https_open(req)
+
+        port = parsed.port or 443
+        key = (hostname, port)
+        selector = parsed.path or "/"
+        if parsed.query:
+            selector = f"{selector}?{parsed.query}"
+
+        timeout = getattr(req, "timeout", 30)
+        if not isinstance(timeout, (int, float)) or isinstance(timeout, bool):
+            timeout = 30
+
+        headers: Dict[str, str] = {}
+        for k, v in req.header_items():
+            headers[k] = v
+        if not any(k.lower() == "connection" for k in headers):
+            headers["Connection"] = "keep-alive"
+        if req.data is not None and not any(k.lower() == "content-length" for k in headers):
+            headers["Content-Length"] = str(len(req.data))
+
+        pool = self._get_pool()
+        for attempt in range(2):
+            reused = key in pool
+            conn = pool.get(key)
+            if conn is None:
+                conn = http.client.HTTPSConnection(hostname, port, timeout=timeout, context=self._context)
+                pool[key] = conn
+            else:
+                conn.timeout = timeout
+
+            try:
+                conn.request(req.get_method(), selector, body=req.data, headers=headers)
+                resp = conn.getresponse()
+                raw_body = resp.read()
+                conn_header = (resp.getheader("Connection") or "").lower()
+                if resp.will_close or "close" in conn_header:
+                    self._close_conn(pool, key)
+
+                wrapped = urllib.response.addinfourl(
+                    io.BytesIO(raw_body),
+                    resp.msg,
+                    req.full_url,
+                    resp.status,
+                )
+                wrapped.msg = resp.reason
+                return wrapped
+            except (http.client.RemoteDisconnected, http.client.BadStatusLine, ConnectionResetError, BrokenPipeError) as e:
+                self._close_conn(pool, key)
+                if reused and attempt == 0:
+                    continue
+                raise urllib.error.URLError(e) from e
+            except (OSError, http.client.HTTPException) as e:
+                self._close_conn(pool, key)
+                raise urllib.error.URLError(e) from e
+
+
+def _install_keepalive_opener() -> None:
+    try:
+        opener = urllib.request.build_opener(KeepAliveHTTPSHandler())
+        urllib.request.install_opener(opener)
+    except Exception as e:
+        logger.debug("Could not install keep-alive opener: %s", e)
+
+
+_install_keepalive_opener()
+
+
+class GitHubClient:
+    """GitHub REST & GraphQL API Client using Python standard library with pooling and ETag caching."""
+
+    def __init__(self, token: Optional[str] = None, use_graphql_batch: bool = True):
         self.token = token if token is not None else os.getenv("GITHUB_TOKEN", "")
         self._current_user = None
+        self._user_fetch_failed_at: float = 0.0
+        self._etag_lock = threading.Lock()
+        self._etag_cache: Dict[str, Tuple[str, Any]] = {}
+        self._use_graphql_batch = bool(use_graphql_batch)
 
     def set_token(self, token: str) -> None:
-        """Update API credentials and invalidate the cached GitHub profile."""
+        """Update API credentials and invalidate cached profile and ETags."""
         self.token = token or ""
         self._current_user = None
+        self._user_fetch_failed_at = 0.0
+        with self._etag_lock:
+            self._etag_cache.clear()
 
     def _headers(self) -> Dict[str, str]:
         headers = {
@@ -41,20 +149,40 @@ class GitHubClient:
     def _request(self, method: str, endpoint: str, data: Optional[Dict[str, Any]] = None) -> Any:
         url = endpoint if endpoint.startswith("http") else f"{GITHUB_API_BASE}{endpoint}"
         payload = json.dumps(data).encode("utf-8") if data is not None else None
-        headers = self._headers()
-        if payload is not None:
-            headers["Content-Type"] = "application/json"
+        is_get = method.upper() == "GET"
 
         max_retries = 3
         for attempt in range(max_retries):
+            headers = self._headers()
+            if payload is not None:
+                headers["Content-Type"] = "application/json"
+            if is_get:
+                with self._etag_lock:
+                    cached = self._etag_cache.get(url)
+                if cached:
+                    headers["If-None-Match"] = cached[0]
+
             req = urllib.request.Request(url, data=payload, headers=headers, method=method)
             try:
                 with urllib.request.urlopen(req, timeout=30) as resp:
                     resp_body = resp.read().decode("utf-8")
-                    if resp_body:
-                        return json.loads(resp_body)
-                    return {}
+                    parsed = json.loads(resp_body) if resp_body else {}
+                    resp_headers = getattr(resp, "headers", None)
+                    etag = resp_headers.get("ETag") if resp_headers is not None else None
+                    if is_get and isinstance(etag, str) and etag.strip():
+                        with self._etag_lock:
+                            if len(self._etag_cache) >= 512 and url not in self._etag_cache:
+                                oldest_key = next(iter(self._etag_cache))
+                                self._etag_cache.pop(oldest_key, None)
+                            self._etag_cache[url] = (etag.strip(), copy.deepcopy(parsed))
+                    return parsed
             except urllib.error.HTTPError as e:
+                if e.code == 304 and is_get:
+                    with self._etag_lock:
+                        cached = self._etag_cache.get(url)
+                    if cached is not None:
+                        return copy.deepcopy(cached[1])
+
                 error_body = e.read().decode("utf-8", errors="replace")
                 is_rate_limit = e.code in (429,) or (
                     e.code == 403 and (
@@ -270,9 +398,21 @@ class GitHubClient:
 
     def get_username(self) -> str:
         """Returns the username of the authenticated user or empty string."""
+        if not self.token:
+            return ""
+        if self._current_user:
+            return self._current_user.get("login", "")
+        if self._user_fetch_failed_at and (time.monotonic() - self._user_fetch_failed_at) < 60.0:
+            return ""
         try:
             user = self.get_authenticated_user()
+            self._user_fetch_failed_at = 0.0
             return user.get("login", "")
+        except GitHubAPIException as e:
+            if e.status_code in (401, 403):
+                self._user_fetch_failed_at = time.monotonic()
+            logger.warning("Could not fetch authenticated username: %s", e)
+            return ""
         except Exception as e:
             logger.warning("Could not fetch authenticated username: %s", e)
             return ""
@@ -456,7 +596,16 @@ class GitHubClient:
 
         return {"has_conflict": False, "mergeable_state": "unknown"}
 
-    def has_user_reviewed_sha(self, owner: str, repo: str, pr_number: int, commit_sha: str, username: Optional[str] = None) -> Tuple[bool, Optional[str]]:
+    def has_user_reviewed_sha(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        commit_sha: str,
+        username: Optional[str] = None,
+        reviews: Optional[List[Dict[str, Any]]] = None,
+        comments: Optional[List[Dict[str, Any]]] = None,
+    ) -> Tuple[bool, Optional[str]]:
         """
         Checks if the PR has already been automatically reviewed by CodeRabbit on the given commit SHA.
         Returns (has_reviewed, review_state).
@@ -468,8 +617,8 @@ class GitHubClient:
 
         # 1. Check formal reviews for automated CodeRabbit signature
         try:
-            reviews = self.get_reviews_for_pr(owner, repo, pr_number)
-            for r in reversed(reviews):
+            review_list = reviews if reviews is not None else self.get_reviews_for_pr(owner, repo, pr_number)
+            for r in reversed(review_list):
                 reviewer = (r.get("user") or {}).get("login", "")
                 r_commit = r.get("commit_id", "")
                 state = r.get("state", "").upper()
@@ -497,8 +646,8 @@ class GitHubClient:
 
         # 2. Check PR comment history for automated CodeRabbit comments
         try:
-            comments = self.get_comments_for_pr(owner, repo, pr_number)
-            for comment in reversed(comments):
+            comment_list = comments if comments is not None else self.get_comments_for_pr(owner, repo, pr_number)
+            for comment in reversed(comment_list):
                 author = (comment.get("user") or {}).get("login", "")
                 body = comment.get("body", "")
 
@@ -535,188 +684,171 @@ class GitHubClient:
 
         return False, None
 
-    def get_pr_review_summary(self, owner: str, repo: str, pr_number: int, commit_sha: str = "", auth_user: Optional[str] = None, pr_author: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Inspects all reviews, comments, and CI check runs on a PR to detect:
-        1. Whether any reviewer requested changes (and who).
-        2. Whether the PR is Auto Approved by You (CodeRabbit automated review on current SHA).
-        3. Whether the PR is Manually Approved by you (human GitHub approval without automated signature).
-        4. Whether other reviewers commented on the PR.
-        5. Whether the author approved in text or commented/replied.
-        6. Whether any CI checks have errors/failures.
-        """
-        user = (auth_user or self.get_username() or "").lower()
+    def _summarize_pr_data(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        reviews: List[Dict[str, Any]],
+        comments: List[Dict[str, Any]],
+        commit_sha: str,
+        auth_user: Optional[str],
+        pr_author: Optional[str],
+        check_summary: Dict[str, Any],
+        conflict_summary: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Classifies reviews, comments, CI checks, and mergeability into a summary dict."""
+        user = (auth_user or "").lower()
         author_lower = (pr_author or "").strip().lower()
         author_text_approved = False
         short_sha = commit_sha[:8] if commit_sha else ""
 
-        other_changes_requested = []
-        other_approved = []
-        outdated_approvals = []
-        outdated_changes_requested = []
+        other_changes_requested: List[str] = []
+        other_approved: List[str] = []
+        outdated_approvals: List[str] = []
+        outdated_changes_requested: List[str] = []
         other_commented = set()
         user_auto_approved = False
         user_manually_approved = False
         user_review_state = None
         has_user_reviewed = False
 
-        try:
-            reviews = self.get_reviews_for_pr(owner, repo, pr_number)
-            latest_by_reviewer: Dict[str, Dict[str, Any]] = {}
-            latest_decisive_by_reviewer: Dict[str, Dict[str, Any]] = {}
-            has_commented_by_reviewer: Dict[str, bool] = {}
+        latest_by_reviewer: Dict[str, Dict[str, Any]] = {}
+        latest_decisive_by_reviewer: Dict[str, Dict[str, Any]] = {}
+        has_commented_by_reviewer: Dict[str, bool] = {}
 
-            for r in reviews:
-                reviewer = ((r.get("user") or {}).get("login") or "").strip()
-                if not reviewer:
-                    continue
-                rev_key = reviewer.lower()
-                # A developer (PR author) replying to a comment is not a review
-                if author_lower and rev_key == author_lower:
-                    continue
-                latest_by_reviewer[rev_key] = r
-                state = (r.get("state") or "").upper()
-                if state in ("APPROVED", "CHANGES_REQUESTED"):
-                    latest_decisive_by_reviewer[rev_key] = r
-                elif state == "DISMISSED":
-                    latest_decisive_by_reviewer.pop(rev_key, None)
-                elif state == "COMMENTED":
-                    has_commented_by_reviewer[rev_key] = True
+        for r in reviews:
+            reviewer = ((r.get("user") or {}).get("login") or "").strip()
+            if not reviewer:
+                continue
+            rev_key = reviewer.lower()
+            # A developer (PR author) replying to a comment is not a review
+            if author_lower and rev_key == author_lower:
+                continue
+            latest_by_reviewer[rev_key] = r
+            state = (r.get("state") or "").upper()
+            if state in ("APPROVED", "CHANGES_REQUESTED"):
+                latest_decisive_by_reviewer[rev_key] = r
+            elif state == "DISMISSED":
+                latest_decisive_by_reviewer.pop(rev_key, None)
+            elif state == "COMMENTED":
+                has_commented_by_reviewer[rev_key] = True
 
-            all_reviewers = set(latest_by_reviewer.keys()) | set(latest_decisive_by_reviewer.keys())
-            for rev_lower in all_reviewers:
-                # Prioritize decisive review (APPROVED / CHANGES_REQUESTED) over subsequent advisory COMMENTED
-                # only if the decisive review is on the current PR commit or both reviews are on the same commit.
-                # If a reviewer submitted a subsequent review on a newer commit SHA, that newer review supersedes
-                # the older outdated approval/decision.
-                r_decisive = latest_decisive_by_reviewer.get(rev_lower)
-                r_latest = latest_by_reviewer.get(rev_lower)
+        all_reviewers = set(latest_by_reviewer.keys()) | set(latest_decisive_by_reviewer.keys())
+        for rev_lower in all_reviewers:
+            r_decisive = latest_decisive_by_reviewer.get(rev_lower)
+            r_latest = latest_by_reviewer.get(rev_lower)
 
-                if r_decisive and not r_latest:
+            if r_decisive and not r_latest:
+                r = r_decisive
+            elif r_latest and not r_decisive:
+                r = r_latest
+            else:
+                dec_commit = (r_decisive.get("commit_id") or "").strip()
+                lat_commit = (r_latest.get("commit_id") or "").strip()
+
+                dec_matched = bool(commit_sha and (dec_commit == commit_sha or (short_sha and dec_commit.startswith(short_sha))))
+                lat_matched = bool(commit_sha and (lat_commit == commit_sha or (short_sha and lat_commit.startswith(short_sha))))
+
+                if dec_matched:
                     r = r_decisive
-                elif r_latest and not r_decisive:
+                elif lat_matched:
+                    r = r_latest
+                elif dec_commit != lat_commit:
                     r = r_latest
                 else:
-                    dec_commit = (r_decisive.get("commit_id") or "").strip()
-                    lat_commit = (r_latest.get("commit_id") or "").strip()
+                    r = r_decisive
 
-                    dec_matched = bool(commit_sha and (dec_commit == commit_sha or (short_sha and dec_commit.startswith(short_sha))))
-                    lat_matched = bool(commit_sha and (lat_commit == commit_sha or (short_sha and lat_commit.startswith(short_sha))))
+            reviewer_login = (r.get("user") or {}).get("login") or rev_lower
+            state = (r.get("state") or "").upper()
+            r_commit = r.get("commit_id", "")
+            body = r.get("body", "") or ""
+            commit_matched = bool(not commit_sha or r_commit == commit_sha or (short_sha and r_commit.startswith(short_sha)))
+            is_cr_auto = ("🐰" in body) or ("CodeRabbit" in body)
 
-                    if dec_matched:
-                        r = r_decisive
-                    elif lat_matched:
-                        r = r_latest
-                    elif dec_commit != lat_commit:
-                        r = r_latest
-                    else:
-                        r = r_decisive
-
-                reviewer_login = (r.get("user") or {}).get("login") or rev_lower
-                state = (r.get("state") or "").upper()
-                r_commit = r.get("commit_id", "")
-                body = r.get("body", "") or ""
-                commit_matched = bool(not commit_sha or r_commit == commit_sha or (short_sha and r_commit.startswith(short_sha)))
-                is_cr_auto = ("🐰" in body) or ("CodeRabbit" in body)
-
-                if user and rev_lower == user:
-                    if state == "APPROVED":
-                        if is_cr_auto:
-                            if commit_matched:
-                                user_auto_approved = True
-                                has_user_reviewed = True
-                                user_review_state = "APPROVED"
-                        else:
-                            user_manually_approved = True
-                            if not has_user_reviewed:
-                                user_review_state = "APPROVED"
-                    elif state == "CHANGES_REQUESTED":
+            if user and rev_lower == user:
+                if state == "APPROVED":
+                    if is_cr_auto:
                         if commit_matched:
+                            user_auto_approved = True
                             has_user_reviewed = True
-                            user_review_state = "CHANGES_REQUESTED"
-                    elif state == "COMMENTED":
-                        if commit_matched and is_cr_auto:
-                            has_user_reviewed = True
-                            outcome = "COMMENTED"
-                            if "NEEDS_WORK" in body:
-                                outcome = "NEEDS_WORK (Minor Issues Detected)"
-                            elif "CHANGES_REQUESTED" in body:
-                                outcome = "CHANGES_REQUESTED"
-                            elif "APPROVED" in body:
-                                outcome = "APPROVED"
-                                user_auto_approved = True
-                            user_review_state = outcome
-                else:
-                    if state == "CHANGES_REQUESTED":
-                        other_changes_requested.append(reviewer_login)
-                        if not commit_matched and reviewer_login not in outdated_changes_requested:
-                            outdated_changes_requested.append(reviewer_login)
-                    elif state == "APPROVED":
-                        if reviewer_login not in other_approved:
-                            other_approved.append(reviewer_login)
-                        if not commit_matched and reviewer_login not in outdated_approvals:
-                            outdated_approvals.append(reviewer_login)
-                    elif state == "COMMENTED":
-                        if not is_cr_auto and "coderabbit" not in rev_lower:
-                            other_commented.add(reviewer_login)
+                            user_review_state = "APPROVED"
+                    else:
+                        user_manually_approved = True
+                        if not has_user_reviewed:
+                            user_review_state = "APPROVED"
+                elif state == "CHANGES_REQUESTED":
+                    if commit_matched:
+                        has_user_reviewed = True
+                        user_review_state = "CHANGES_REQUESTED"
+                elif state == "COMMENTED":
+                    if commit_matched and is_cr_auto:
+                        has_user_reviewed = True
+                        outcome = "COMMENTED"
+                        if "NEEDS_WORK" in body:
+                            outcome = "NEEDS_WORK (Minor Issues Detected)"
+                        elif "CHANGES_REQUESTED" in body:
+                            outcome = "CHANGES_REQUESTED"
+                        elif "APPROVED" in body:
+                            outcome = "APPROVED"
+                            user_auto_approved = True
+                        user_review_state = outcome
+            else:
+                if state == "CHANGES_REQUESTED":
+                    other_changes_requested.append(reviewer_login)
+                    if not commit_matched and reviewer_login not in outdated_changes_requested:
+                        outdated_changes_requested.append(reviewer_login)
+                elif state == "APPROVED":
+                    if reviewer_login not in other_approved:
+                        other_approved.append(reviewer_login)
+                    if not commit_matched and reviewer_login not in outdated_approvals:
+                        outdated_approvals.append(reviewer_login)
+                elif state == "COMMENTED":
+                    if not is_cr_auto and "coderabbit" not in rev_lower:
+                        other_commented.add(reviewer_login)
 
-            # If any reviewer submitted comments but hasn't approved or requested changes, include in other_commented
-            for rev_lower, did_comment in has_commented_by_reviewer.items():
-                if did_comment and rev_lower not in [u.lower() for u in other_approved] and rev_lower not in [u.lower() for u in other_changes_requested]:
-                    if not (user and rev_lower == user) and "coderabbit" not in rev_lower:
-                        r_comm = latest_by_reviewer.get(rev_lower, {})
-                        c_login = (r_comm.get("user") or {}).get("login") or rev_lower
-                        other_commented.add(c_login)
+        for rev_lower, did_comment in has_commented_by_reviewer.items():
+            if did_comment and rev_lower not in [u.lower() for u in other_approved] and rev_lower not in [u.lower() for u in other_changes_requested]:
+                if not (user and rev_lower == user) and "coderabbit" not in rev_lower:
+                    r_comm = latest_by_reviewer.get(rev_lower, {})
+                    c_login = (r_comm.get("user") or {}).get("login") or rev_lower
+                    other_commented.add(c_login)
 
-        except Exception as e:
-            logger.warning("Error inspecting review summary for %s/%s PR #%s: %s", owner, repo, pr_number, e)
-
-        # Fallback check for automated review in issue comments / has_user_reviewed_sha
+        # Fallback check for automated review in issue comments using already-fetched data
         if not user_auto_approved and commit_sha:
-            has_auto, auto_state = self.has_user_reviewed_sha(owner, repo, pr_number, commit_sha, username=user)
+            has_auto, auto_state = self.has_user_reviewed_sha(
+                owner, repo, pr_number, commit_sha, username=user, reviews=reviews, comments=comments
+            )
             if has_auto:
                 has_user_reviewed = True
                 user_review_state = auto_state
                 if auto_state == "APPROVED":
                     user_auto_approved = True
 
-        # Check for other commenters from PR issue comments
-        try:
-            comments = self.get_comments_for_pr(owner, repo, pr_number)
-            for c in comments:
-                c_user = ((c.get("user") or {}).get("login") or "").strip()
-                c_body = c.get("body", "") or ""
-                if not c_user or "coderabbit" in c_user.lower():
-                    continue
-                if user and c_user.lower() == user:
-                    continue
+        for c in comments:
+            c_user = ((c.get("user") or {}).get("login") or "").strip()
+            c_body = c.get("body", "") or ""
+            if not c_user or "coderabbit" in c_user.lower():
+                continue
+            if user and c_user.lower() == user:
+                continue
 
-                if author_lower and c_user.lower() == author_lower:
-                    if AUTHOR_APPROVAL_PATTERN.search(c_body):
-                        author_text_approved = True
-                        if c_user not in other_approved:
-                            other_approved.append(c_user)
-                    continue
+            if author_lower and c_user.lower() == author_lower:
+                if AUTHOR_APPROVAL_PATTERN.search(c_body):
+                    author_text_approved = True
+                    if c_user not in other_approved:
+                        other_approved.append(c_user)
+                continue
 
-                other_commented.add(c_user)
-        except Exception as e:
-            logger.debug("Could not fetch issue comments for PR #%s: %s", pr_number, e)
+            other_commented.add(c_user)
 
-        # Ensure reviewers who approved or whose changes were requested are not left in other_commented
         other_commented = {
             u for u in other_commented
             if u.lower() not in [a.lower() for a in other_approved]
             and u.lower() not in [c.lower() for c in other_changes_requested]
         }
-        # The PR author is the developer, never an other reviewer/commenter
         if author_lower:
             other_commented = {u for u in other_commented if u.lower() != author_lower}
-
-        # Check CI check runs for errors and status
-        check_summary = self.get_check_runs_summary(owner, repo, commit_sha) if commit_sha else {"has_check_error": False, "failed_checks": [], "checks_status": None}
-
-        # Check merge conflict status
-        conflict_summary = self.get_pr_mergeable_status(owner, repo, pr_number)
 
         return {
             "has_other_changes_requested": len(other_changes_requested) > 0,
@@ -737,6 +869,307 @@ class GitHubClient:
             "has_user_reviewed": has_user_reviewed,
             "user_review_state": user_review_state
         }
+
+    def get_pr_review_summary(self, owner: str, repo: str, pr_number: int, commit_sha: str = "", auth_user: Optional[str] = None, pr_author: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Inspects all reviews, comments, and CI check runs on a PR to detect:
+        1. Whether any reviewer requested changes (and who).
+        2. Whether the PR is Auto Approved by You (CodeRabbit automated review on current SHA).
+        3. Whether the PR is Manually Approved by you (human GitHub approval without automated signature).
+        4. Whether other reviewers commented on the PR.
+        5. Whether the author approved in text or commented/replied.
+        6. Whether any CI checks have errors/failures.
+        """
+        resolved_auth_user = auth_user if auth_user is not None else self.get_username()
+
+        reviews: List[Dict[str, Any]] = []
+        try:
+            reviews = self.get_reviews_for_pr(owner, repo, pr_number)
+        except Exception as e:
+            logger.warning("Error inspecting review summary for %s/%s PR #%s: %s", owner, repo, pr_number, e)
+
+        comments: List[Dict[str, Any]] = []
+        try:
+            comments = self.get_comments_for_pr(owner, repo, pr_number)
+        except Exception as e:
+            logger.debug("Could not fetch issue comments for PR #%s: %s", pr_number, e)
+
+        check_summary = self.get_check_runs_summary(owner, repo, commit_sha) if commit_sha else {"has_check_error": False, "failed_checks": [], "checks_status": None}
+        conflict_summary = self.get_pr_mergeable_status(owner, repo, pr_number)
+
+        return self._summarize_pr_data(
+            owner=owner,
+            repo=repo,
+            pr_number=pr_number,
+            reviews=reviews,
+            comments=comments,
+            commit_sha=commit_sha,
+            auth_user=resolved_auth_user,
+            pr_author=pr_author,
+            check_summary=check_summary,
+            conflict_summary=conflict_summary,
+        )
+
+    @staticmethod
+    def _summarize_graphql_checks(commit_node: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        rollup = ((commit_node or {}).get("commit") or {}).get("statusCheckRollup")
+        if not isinstance(rollup, dict):
+            return {"has_check_error": False, "failed_checks": [], "checks_status": None}
+
+        contexts = ((rollup.get("contexts") or {}).get("nodes")) or []
+        failed: List[str] = []
+        ongoing: List[str] = []
+        passed: List[str] = []
+
+        for ctx in contexts:
+            if not isinstance(ctx, dict):
+                continue
+            typename = ctx.get("__typename", "")
+            if typename == "CheckRun" or ("status" in ctx or "conclusion" in ctx):
+                status = (ctx.get("status") or "").lower()
+                conclusion = (ctx.get("conclusion") or "").lower()
+                name = ctx.get("name") or "Unknown Check"
+                if conclusion in ("failure", "timed_out", "action_required", "cancelled", "startup_failure"):
+                    failed.append(name)
+                elif status in ("queued", "in_progress", "waiting", "requested", "pending") or (status != "completed" and not conclusion):
+                    ongoing.append(name)
+                elif conclusion in ("success", "neutral", "skipped"):
+                    passed.append(name)
+            elif typename == "StatusContext" or "context" in ctx:
+                state = (ctx.get("state") or "").lower()
+                context_name = ctx.get("context") or "Unknown Status"
+                if state in ("failure", "error"):
+                    failed.append(context_name)
+                elif state == "pending":
+                    ongoing.append(context_name)
+                elif state == "success":
+                    passed.append(context_name)
+
+        if failed:
+            checks_status = "FAILED"
+        elif ongoing:
+            checks_status = "ONGOING"
+        elif passed:
+            checks_status = "PASSED"
+        else:
+            rollup_state = (rollup.get("state") or "").upper()
+            if rollup_state in ("FAILURE", "ERROR"):
+                checks_status = "FAILED"
+            elif rollup_state == "PENDING":
+                checks_status = "ONGOING"
+            elif rollup_state == "SUCCESS":
+                checks_status = "PASSED"
+            else:
+                checks_status = None
+
+        return {
+            "has_check_error": len(failed) > 0 or checks_status == "FAILED",
+            "failed_checks": failed,
+            "checks_status": checks_status,
+        }
+
+    def fetch_repo_open_prs_graphql(
+        self,
+        owner: str,
+        repo: str,
+        auth_user: Optional[str] = None,
+    ) -> Optional[List[Dict[str, Any]]]:
+        """
+        Fetches open pull requests and their reviews, comments, CI rollup, mergeability,
+        and base branch tips in a single GraphQL request. Returns None on fallback/error.
+        """
+        if not self.token:
+            return None
+
+        query = """query($owner: String!, $repo: String!) {
+          repository(owner: $owner, name: $repo) {
+            pullRequests(first: 50, states: OPEN, orderBy: {field: UPDATED_AT, direction: DESC}) {
+              nodes {
+                number
+                title
+                url
+                createdAt
+                updatedAt
+                mergeable
+                mergeStateStatus
+                author { login }
+                baseRefName
+                baseRefOid
+                baseRef { target { oid } }
+                headRefName
+                headRefOid
+                reviews(last: 100) {
+                  totalCount
+                  nodes {
+                    author { login }
+                    state
+                    body
+                    commit { oid }
+                  }
+                }
+                comments(last: 100) {
+                  totalCount
+                  nodes {
+                    author { login }
+                    body
+                  }
+                }
+                commits(last: 1) {
+                  nodes {
+                    commit {
+                      oid
+                      statusCheckRollup {
+                        state
+                        contexts(first: 100) {
+                          nodes {
+                            __typename
+                            ... on CheckRun {
+                              name
+                              status
+                              conclusion
+                            }
+                            ... on StatusContext {
+                              context
+                              state
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }"""
+
+        try:
+            res = self._request("POST", f"{GITHUB_API_BASE}/graphql", {
+                "query": query,
+                "variables": {"owner": owner, "repo": repo},
+            })
+            if not isinstance(res, dict) or res.get("errors"):
+                return None
+            repo_data = (res.get("data") or {}).get("repository")
+            if not repo_data:
+                return None
+            nodes = ((repo_data.get("pullRequests") or {}).get("nodes")) or []
+        except Exception as e:
+            logger.debug("GraphQL batch PR fetch failed for %s/%s, falling back to REST: %s", owner, repo, e)
+            return None
+
+        resolved_auth_user = auth_user if auth_user is not None else self.get_username()
+        full_name = f"{owner}/{repo}"
+        items: List[Dict[str, Any]] = []
+
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            num = node.get("number")
+            if num is None:
+                continue
+            pr_key = f"{full_name}#{num}"
+            author = ((node.get("author") or {}).get("login")) or ""
+            is_own = bool(resolved_auth_user and author.lower() == resolved_auth_user.lower())
+            base_ref = node.get("baseRefName") or ""
+            base_sha = node.get("baseRefOid") or ""
+            base_tip_sha = (((node.get("baseRef") or {}).get("target") or {}).get("oid")) or ""
+            head_ref = node.get("headRefName") or ""
+            head_sha = node.get("headRefOid") or ""
+            updated_at = node.get("updatedAt") or ""
+
+            reviews_conn = node.get("reviews") or {}
+            comments_conn = node.get("comments") or {}
+            if (reviews_conn.get("totalCount") or 0) > 100 or (comments_conn.get("totalCount") or 0) > 100:
+                review_summary = self.get_pr_review_summary(
+                    owner, repo, num, commit_sha=head_sha, auth_user=resolved_auth_user, pr_author=author
+                )
+            else:
+                reviews = [
+                    {
+                        "user": {"login": ((r.get("author") or {}).get("login")) or ""},
+                        "state": r.get("state") or "",
+                        "body": r.get("body") or "",
+                        "commit_id": ((r.get("commit") or {}).get("oid")) or "",
+                    }
+                    for r in (reviews_conn.get("nodes") or [])
+                    if isinstance(r, dict)
+                ]
+                comments = [
+                    {
+                        "user": {"login": ((c.get("author") or {}).get("login")) or ""},
+                        "body": c.get("body") or "",
+                    }
+                    for c in (comments_conn.get("nodes") or [])
+                    if isinstance(c, dict)
+                ]
+                commit_nodes = ((node.get("commits") or {}).get("nodes")) or []
+                latest_commit_node = commit_nodes[-1] if commit_nodes else None
+                check_summary = self._summarize_graphql_checks(latest_commit_node)
+
+                gql_mergeable = str(node.get("mergeable") or "").upper()
+                gql_state = str(node.get("mergeStateStatus") or "").lower()
+                has_conflict = (gql_mergeable == "CONFLICTING") or (gql_state in ("dirty", "conflicting"))
+                if gql_mergeable == "CONFLICTING" and gql_state in ("", "unknown"):
+                    gql_state = "dirty"
+                elif gql_mergeable == "UNKNOWN" and not gql_state:
+                    gql_state = "unknown"
+                elif not gql_state:
+                    gql_state = "clean" if not has_conflict else "dirty"
+                conflict_summary = {"has_conflict": has_conflict, "mergeable_state": gql_state}
+
+                review_summary = self._summarize_pr_data(
+                    owner=owner,
+                    repo=repo,
+                    pr_number=num,
+                    reviews=reviews,
+                    comments=comments,
+                    commit_sha=head_sha,
+                    auth_user=resolved_auth_user,
+                    pr_author=author,
+                    check_summary=check_summary,
+                    conflict_summary=conflict_summary,
+                )
+
+            m_state = review_summary.get("mergeable_state")
+            if not m_state:
+                m_state = "clean" if review_summary.get("has_conflict") is False else "unknown"
+
+            items.append({
+                "pr_key": pr_key,
+                "repo": full_name,
+                "number": num,
+                "title": node.get("title") or "",
+                "author": author,
+                "is_own_pr": is_own,
+                "base_ref": base_ref,
+                "base_sha": base_sha,
+                "base_tip_sha": base_tip_sha,
+                "head_ref": head_ref,
+                "head_sha": head_sha,
+                "html_url": node.get("url") or "",
+                "created_at": node.get("createdAt") or "",
+                "updated_at": updated_at,
+                "has_other_changes_requested": review_summary.get("has_other_changes_requested", False),
+                "other_changes_requested_by": review_summary.get("other_changes_requested_by", []),
+                "other_approved_by": review_summary.get("other_approved_by", []),
+                "outdated_approvals_by": review_summary.get("outdated_approvals_by", []),
+                "outdated_changes_requested_by": review_summary.get("outdated_changes_requested_by", []),
+                "other_commented_by": review_summary.get("other_commented_by", []),
+                "has_other_commented": review_summary.get("has_other_commented", False),
+                "has_user_auto_approved": review_summary.get("has_user_auto_approved", False),
+                "has_user_manually_approved": review_summary.get("has_user_manually_approved", False),
+                "author_approved_in_text": review_summary.get("author_approved_in_text", False),
+                "has_check_error": review_summary.get("has_check_error", False),
+                "failed_checks": review_summary.get("failed_checks", []),
+                "checks_status": review_summary.get("checks_status", None),
+                "has_conflict": review_summary.get("has_conflict", False),
+                "mergeable_state": m_state,
+                "has_user_reviewed": review_summary.get("has_user_reviewed", False),
+                "user_review_state": review_summary.get("user_review_state"),
+            })
+
+        return items
 
     def find_bot_comment(self, owner: str, repo: str, pr_number: int, marker: str = "🐰 CodeRabbit") -> Optional[Dict[str, Any]]:
         """Finds existing bot status comment on an issue/PR to prevent duplicate spam."""

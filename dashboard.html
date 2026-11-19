@@ -1574,6 +1574,7 @@
     <script>
         let currentStatus = null;
         let activeActionCount = 0;
+        let lastStatusEtag = null;
 
         function showToast(message, type = 'info', durationMs = 4000) {
             const container = document.getElementById('toast-container');
@@ -1653,9 +1654,14 @@
             }
         }
 
-        async function fetchStatus() {
+        async function fetchStatus(force = false) {
+            if (!force && document.hidden) return;
             try {
-                const res = await fetch('/api/status');
+                const headers = (!force && lastStatusEtag) ? { 'If-None-Match': lastStatusEtag } : {};
+                const res = await fetch('/api/status', { headers });
+                if (res.status === 304) return;
+                const etag = res.headers.get('ETag');
+                if (etag) lastStatusEtag = etag;
                 const data = await res.json();
                 currentStatus = data;
                 renderDashboard(data);
@@ -1807,7 +1813,9 @@
             if (!btn) return;
 
             const pending = queue && queue.pending ? queue.pending : [];
-            const active = queue && queue.active ? [queue.active] : [];
+            const active = (queue && Array.isArray(queue.active_items) && queue.active_items.length)
+                ? queue.active_items
+                : (queue && queue.active ? [queue.active] : []);
 
             if (isRateLimited) {
                 btn.className = 'btn btn-sm btn-queue-trigger rate-limited';
@@ -1875,7 +1883,9 @@
             const count = document.getElementById('review-queue-count');
             if (!list || !count) return;
             const pending = queue.pending || [];
-            const active = queue.active ? [queue.active] : [];
+            const active = (queue && Array.isArray(queue.active_items) && queue.active_items.length)
+                ? queue.active_items
+                : (queue.active ? [queue.active] : []);
             const items = [...active, ...pending];
             count.textContent = `${pending.length} waiting${active.length ? ` · ${active.length} reviewing` : ''}`;
             count.className = active.length ? 'badge badge-blue' : pending.length ? 'badge badge-purple' : 'badge badge-gray';
@@ -1886,8 +1896,8 @@
             const prsByKey = new Map(prs.map(pr => [pr.pr_key, pr]));
             list.innerHTML = items.map((item, index) => {
                 const pr = prsByKey.get(item.pr_key) || {};
-                const isOngoing = index === 0 && active.length > 0;
-                const state = isOngoing ? '⚡ IN PROGRESS' : `#${index + (active.length ? 0 : 1)} WAITING`;
+                const isOngoing = index < active.length;
+                const state = isOngoing ? (item.account_name ? `⚡ IN PROGRESS (${escapeHtml(item.account_name)})` : '⚡ IN PROGRESS') : `#${index - active.length + 1} WAITING`;
                 const repoNum = pr.repo && pr.number ? `${escapeHtml(pr.repo)} #${pr.number}` : escapeHtml(item.pr_key);
                 const titleAttr = pr.title ? ` title="${escapeHtml(pr.title)}"` : '';
                 const detailsUrl = `/pr-details?pr_key=${encodeURIComponent(item.pr_key)}`;
@@ -1895,8 +1905,8 @@
                 const branch = pr.head_ref ? `<span>🌱 <code>${escapeHtml(pr.head_ref)}</code></span>` : '';
                 const forceBadge = item.force ? '<span class="badge badge-orange" style="font-size:0.7rem; padding:1px 5px;">Force</span>' : '';
 
-                const canMoveToTop = !isOngoing && (active.length ? index > 1 : index > 0);
-                const isNextUp = !isOngoing && (active.length ? index === 1 : index === 0);
+                const canMoveToTop = !isOngoing && index > active.length;
+                const isNextUp = !isOngoing && index === active.length;
                 const priorityAction = canMoveToTop 
                     ? `<button class="btn btn-prioritize" onclick="moveQueueItemToTop('${escapeHtml(item.pr_key)}', this)" title="Prioritize: Move to top of review queue">⏫ Move to Top</button>`
                     : isNextUp ? `<span class="badge badge-purple" style="font-size:0.7rem; padding:1px 6px;">Next Up</span>` : '';
@@ -1941,7 +1951,7 @@
                 const result = await res.json();
                 if (res.ok && result.success) {
                     showToast(`Moved ${prKey} to top of queue!`, 'success');
-                    await fetchStatus();
+                    await fetchStatus(true);
                 } else {
                     showToast(`Could not move ${prKey}: ${result.error || 'PR not in queue'}`, 'error');
                 }
@@ -2037,7 +2047,10 @@
                 return;
             }
 
-            const activePrKey = (queue.active || {}).pr_key;
+            const activeList = (queue && Array.isArray(queue.active_items) && queue.active_items.length)
+                ? queue.active_items
+                : (queue && queue.active ? [queue.active] : []);
+            const activePrKeys = new Set(activeList.map(item => item.pr_key).filter(Boolean));
             const queuedPrKeys = new Set((queue.pending || []).map(item => item.pr_key));
 
             const groupedPRs = new Map();
@@ -2092,7 +2105,7 @@
                         ` : `
                         <div class="repo-pr-grid">
                             ${repoPRs.map(pr => {
-                const isOngoing = activePrKey === pr.pr_key;
+                const isOngoing = activePrKeys.has(pr.pr_key);
                 const isQueued = queuedPrKeys.has(pr.pr_key);
                 // Generate status pills
                 const pills = [];
@@ -2254,7 +2267,7 @@
                 } else {
                     showToast(`Scan request failed: ${data.error || 'Server error'}`, 'error');
                 }
-                await fetchStatus();
+                await fetchStatus(true);
             } catch (e) {
                 showToast('Failed to trigger scan: ' + e, 'error');
             } finally {
@@ -2283,7 +2296,7 @@
                         ? `${prKey} is already queued, or a full review scan is currently running.`
                         : `Failed to queue review for ${prKey}: ${data.error || 'Server error'}`, 'error');
                 }
-                await fetchStatus();
+                await fetchStatus(true);
             } catch (e) {
                 showToast(`Review trigger error on ${prKey}: ` + e, 'error');
             } finally {
@@ -2304,7 +2317,7 @@
                 } else {
                     showToast('Failed to clear cooldown.', 'error');
                 }
-                await fetchStatus();
+                await fetchStatus(true);
             } catch (e) {
                 showToast('Failed to clear rate limit: ' + e, 'error');
             } finally {
@@ -2331,7 +2344,7 @@
                 } else {
                     showToast('Failed to change service state.', 'error');
                 }
-                await fetchStatus();
+                await fetchStatus(true);
             } catch (e) {
                 showToast('Failed to toggle service: ' + e, 'error');
             } finally {
@@ -2349,7 +2362,7 @@
                 } else {
                     showToast('Failed to toggle strict mode.', 'error');
                 }
-                await fetchStatus();
+                await fetchStatus(true);
             } catch (e) {
                 showToast('Failed to toggle strict approval: ' + e, 'error');
             }
@@ -2397,7 +2410,7 @@
                 } else {
                     showToast(`Error toggling ${fullName}: ${data.error || 'Server error'}`, 'error');
                 }
-                await fetchStatus();
+                await fetchStatus(true);
                 renderRepoList();
             } catch (e) {
                 showToast('Error toggling repo: ' + e, 'error');
@@ -2418,7 +2431,7 @@
                 } else {
                     showToast(`Failed to remove ${fullName}.`, 'error');
                 }
-                await fetchStatus();
+                await fetchStatus(true);
                 renderRepoList();
             } catch (e) {
                 showToast('Error removing repo: ' + e, 'error');
@@ -2449,7 +2462,7 @@
                     msgEl.textContent = `Repository ${fullName} successfully added!`;
                     showToast(`Repository ${fullName} added successfully!`, 'success');
                     input.value = '';
-                    await fetchStatus();
+                    await fetchStatus(true);
                     renderRepoList();
                 } else {
                     msgEl.style.color = '#ef4444';
@@ -3357,7 +3370,7 @@
             if (!res.ok) throw new Error('Failed to clear review history');
             showToast('Cleared all review history', 'success');
             await loadAllReviewHistory();
-            await fetchStatus();
+            await fetchStatus(true);
         } catch (e) {
             showToast(e.message || 'Error clearing review history', 'error');
         }
@@ -3377,13 +3390,14 @@
             if (!res.ok) throw new Error('Failed to delete history item');
             showToast('Review log entry deleted', 'success');
             await loadAllReviewHistory();
-            await fetchStatus();
+            await fetchStatus(true);
         } catch (e) {
             showToast(e.message || 'Error deleting review log', 'error');
         }
     }
 
-    async function refreshCodeRabbitAuthStatus() {
+    async function refreshCodeRabbitAuthStatus(force = false) {
+        if (!force && document.hidden) return;
         try {
             const response = await fetch('/api/coderabbit-auth');
             const state = await response.json();
@@ -3579,7 +3593,7 @@
                 msgEl.textContent = 'Settings saved successfully!';
                 showToast('Settings saved securely and applied!', 'success');
                 loadSettingsIntoModal(updated);
-                await fetchStatus();
+                await fetchStatus(true);
                 setTimeout(() => {
                     closeSettingsModal();
                 }, 1000);
@@ -4093,10 +4107,16 @@
         }
 
         // Tickers & Init
-        setInterval(fetchStatus, 5000);
-        setInterval(refreshCodeRabbitAuthStatus, 30000);
-        refreshCodeRabbitAuthStatus();
-        fetchStatus();
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) {
+                fetchStatus(true);
+                refreshCodeRabbitAuthStatus(true);
+            }
+        });
+        setInterval(() => fetchStatus(false), 5000);
+        setInterval(() => refreshCodeRabbitAuthStatus(false), 30000);
+        refreshCodeRabbitAuthStatus(true);
+        fetchStatus(true);
     </script>
 </body>
 </html>

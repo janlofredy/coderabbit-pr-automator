@@ -24,16 +24,28 @@ class RepositoryManagementService:
         github_client: GitHubClient,
         executor: Optional[ThreadPoolExecutor] = None,
         pr_executor: Optional[ThreadPoolExecutor] = None,
+        state_manager: Optional[Any] = None,
     ):
         self.config_manager = config_manager
         self.github_client = github_client
+        self.state_manager = state_manager
         self._executor = executor or ThreadPoolExecutor(max_workers=5)
         self._pr_executor = pr_executor or ThreadPoolExecutor(max_workers=10, thread_name_prefix="repo-pr")
         self._cached_prs: List[Dict[str, Any]] = []
+        self._cache_version: int = 0
         self._cache_lock = threading.Lock()
         self._status_lock = threading.Lock()
         self._activity_lock = threading.Lock()
         self._status = {"active": False, "phase": "IDLE", "message": ""}
+        if self.state_manager is not None and hasattr(self.state_manager, "load_pr_cache"):
+            try:
+                self._cached_prs = self.state_manager.load_pr_cache()
+            except Exception as e:
+                logger.warning("Could not warm PR cache from persistent storage: %s", e)
+
+    def get_cache_version(self) -> int:
+        with self._cache_lock:
+            return self._cache_version
 
     def shutdown(self, wait: bool = False) -> None:
         """Shuts down the dedicated PR worker thread pool."""
@@ -248,6 +260,18 @@ class RepositoryManagementService:
             return []
 
         owner, repo_name = GitHubClient.split_repo(full_name)
+
+        if getattr(self.github_client, "_use_graphql_batch", False) is True:
+            try:
+                auth_user = self.github_client.get_username()
+                graphql_prs = self.github_client.fetch_repo_open_prs_graphql(
+                    owner, repo_name, auth_user=auth_user
+                )
+                if graphql_prs is not None:
+                    return graphql_prs
+            except Exception as e:
+                logger.debug("GraphQL batch path failed for %s; falling back to REST: %s", full_name, e)
+
         try:
             prs = self.github_client.list_open_prs(owner, repo_name)
         except Exception as e:
@@ -266,15 +290,29 @@ class RepositoryManagementService:
                 if (pr.get("base") or {}).get("ref")
             }
             base_branch_tips: Dict[str, str] = {}
-            for ref in base_refs:
-                try:
-                    if hasattr(self.github_client, "get_branch"):
-                        branch_data = self.github_client.get_branch(owner, repo_name, ref)
-                        sha = ((branch_data.get("commit") or {}).get("sha")) or ""
+            if hasattr(self.github_client, "get_branch") and base_refs:
+                def _fetch_tip(ref_name: str) -> Optional[str]:
+                    try:
+                        branch_data = self.github_client.get_branch(owner, repo_name, ref_name)
+                        if isinstance(branch_data, dict):
+                            sha = ((branch_data.get("commit") or {}).get("sha")) or ""
+                            return sha if isinstance(sha, str) else ""
+                        return None
+                    except Exception as e:
+                        logger.debug("Could not fetch branch tip for %s/%s branch %s: %s", owner, repo_name, ref_name, e)
+                        return None
+
+                if len(base_refs) > 1:
+                    tip_futures = {ref: self._pr_executor.submit(_fetch_tip, ref) for ref in base_refs}
+                    for ref, fut in tip_futures.items():
+                        sha = fut.result()
                         if sha:
                             base_branch_tips[ref] = sha
-                except Exception as e:
-                    logger.debug("Could not fetch branch tip for %s/%s branch %s: %s", owner, repo_name, ref, e)
+                else:
+                    only_ref = next(iter(base_refs))
+                    sha = _fetch_tip(only_ref)
+                    if sha:
+                        base_branch_tips[only_ref] = sha
 
             # Build a lookup of existing cached PRs for fast delta matching
             with self._cache_lock:
@@ -363,6 +401,12 @@ class RepositoryManagementService:
             self._set_status(True, "UPDATING_PR_CACHE", f"Updating cache with {len(collected)} open pull requests")
             with self._cache_lock:
                 self._cached_prs = collected
+                self._cache_version += 1
+            if self.state_manager is not None and hasattr(self.state_manager, "save_pr_cache"):
+                try:
+                    self.state_manager.save_pr_cache(collected)
+                except Exception as e:
+                    logger.warning("Could not persist PR cache to state storage: %s", e)
             logger.info("PR cache refreshed: %d open PR(s) found across %d repositories.", len(collected), len(enabled_repos))
             return collected
 

@@ -1,6 +1,8 @@
 import os
+import gzip
 import json
 import time
+import hashlib
 import threading
 import logging
 import subprocess
@@ -8,7 +10,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from urllib.parse import urlparse, parse_qs
 
 from timezone_utils import now_app_tz, parse_iso_datetime, get_app_timezone_name
@@ -27,6 +29,23 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(na
 
 PORT = safe_int_env("PORT", 8765)
 HOST = os.getenv("HOST", "0.0.0.0")
+
+_STATIC_FILE_LOCK = threading.Lock()
+_STATIC_FILE_CACHE: Dict[str, Tuple[int, bytes]] = {}
+
+
+def _read_static_cached(file_path: str) -> bytes:
+    """Reads a static file with mtime_ns caching to avoid repeated disk reads."""
+    mtime_ns = os.stat(file_path).st_mtime_ns
+    with _STATIC_FILE_LOCK:
+        cached = _STATIC_FILE_CACHE.get(file_path)
+        if cached is not None and cached[0] == mtime_ns:
+            return cached[1]
+    with open(file_path, "rb") as f:
+        content = f.read()
+    with _STATIC_FILE_LOCK:
+        _STATIC_FILE_CACHE[file_path] = (mtime_ns, content)
+    return content
 
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     """Multi-threaded HTTP Server for fast sub-millisecond responses."""
@@ -52,11 +71,13 @@ class DashboardBackend:
             github_client=self.github_client
         )
 
-        # Keep one shared executor for concurrent repository fetches and the
-        # single-flight review task; the services own their respective logic.
-        self._executor = ThreadPoolExecutor(max_workers=5)
+        # Shared executor for concurrent repository fetches and multi-account review workers
+        self._executor = ThreadPoolExecutor(max_workers=8)
         self.repository_service = RepositoryManagementService(
-            self.config_manager, self.github_client, executor=self._executor
+            self.config_manager,
+            self.github_client,
+            executor=self._executor,
+            state_manager=self.state_manager,
         )
         self.review_service = ReviewManagementService(
             self.config_manager,
@@ -67,7 +88,10 @@ class DashboardBackend:
         )
         self._is_running = True
         self._auth_lock = threading.Lock()
-        self._auth_status_cache = {"status": "checking", "checked_at": 0}
+        self._auth_status_cache: Dict[str, Any] = {"status": "checking", "checked_at": 0}
+        self._auth_refresh_in_flight = False
+        self._daily_summary_lock = threading.Lock()
+        self._daily_summary_cache: Dict[int, Tuple[float, int, int, Dict[str, Any]]] = {}
 
         # Start independent background worker threads
         self._repo_worker_thread = None
@@ -84,11 +108,13 @@ class DashboardBackend:
         return res if res is not None else []
 
     def stop(self) -> None:
-        """Stops background workers and cleanly shuts down executors."""
+        """Stops background workers and cleanly shuts down executors and DB connections."""
         self._is_running = False
         if hasattr(self.repository_service, "shutdown"):
             self.repository_service.shutdown(wait=False)
         self._executor.shutdown(wait=False)
+        if hasattr(self.state_manager, "close"):
+            self.state_manager.close()
 
     def refresh_pr_cache(self) -> None:
         """Compatibility facade; repository cache management lives in its service."""
@@ -236,74 +262,102 @@ class DashboardBackend:
             "output": result.stdout.strip()
         }
 
+    def _run_coderabbit_auth_probe(self) -> Dict[str, Any]:
+        try:
+            result = subprocess.run(
+                ["coderabbit", "auth", "status", "--agent"],
+                capture_output=True,
+                text=True,
+                timeout=8,
+                check=False,
+            )
+        except FileNotFoundError:
+            return {"status": "unavailable", "message": "CodeRabbit CLI not installed"}
+        except subprocess.TimeoutExpired:
+            return {"status": "unavailable", "message": "Authentication check timed out"}
+        else:
+            status = "unavailable"
+            user_info = None
+            current_org = None
+            orgs = []
+            for line in result.stdout.splitlines():
+                try:
+                    event = json.loads(line)
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(event, dict) and event.get("phase") == "auth":
+                    if event.get("authenticated") is True:
+                        status = "authenticated"
+                        user_info = event.get("user")
+                        current_org = event.get("currentOrg", {}).get("name") if isinstance(event.get("currentOrg"), dict) else None
+                        orgs = [o.get("name") for o in event.get("organizations", []) if isinstance(o, dict) and o.get("name")]
+                    elif event.get("authenticated") is False:
+                        status = "needs_auth"
+                    break
+            return {
+                "status": status,
+                "user": user_info,
+                "current_org": current_org,
+                "organizations": orgs,
+            }
+
+    def _refresh_coderabbit_auth_bg(self) -> None:
+        try:
+            status_data = self._run_coderabbit_auth_probe()
+            with self._auth_lock:
+                self._auth_status_cache = {**status_data, "checked_at": time.monotonic()}
+        finally:
+            with self._auth_lock:
+                self._auth_refresh_in_flight = False
+
     def get_coderabbit_auth_status(self) -> Dict[str, Any]:
-        """Return a sanitized, briefly cached status from the official CLI."""
+        """Return a sanitized, briefly cached status from the official CLI without blocking stale refreshes."""
         with self._auth_lock:
             cached = self._auth_status_cache
-            if time.monotonic() - cached.get("checked_at", 0) < 30 and cached.get("status") != "checking":
-                return {k: v for k, v in cached.items() if k != "checked_at"}
-            try:
-                result = subprocess.run(
-                    ["coderabbit", "auth", "status", "--agent"],
-                    capture_output=True,
-                    text=True,
-                    timeout=8,
-                    check=False,
-                )
-            except FileNotFoundError:
-                status_data = {"status": "unavailable", "message": "CodeRabbit CLI not installed"}
-            except subprocess.TimeoutExpired:
-                status_data = {"status": "unavailable", "message": "Authentication check timed out"}
-            else:
-                status = "unavailable"
-                user_info = None
-                current_org = None
-                orgs = []
-                for line in result.stdout.splitlines():
+            age = time.monotonic() - cached.get("checked_at", 0)
+            if cached.get("status") != "checking":
+                if age < 30:
+                    return {k: v for k, v in cached.items() if k != "checked_at"}
+                if not self._auth_refresh_in_flight and self._is_running:
+                    self._auth_refresh_in_flight = True
                     try:
-                        event = json.loads(line)
-                    except (TypeError, ValueError):
-                        continue
-                    if isinstance(event, dict) and event.get("phase") == "auth":
-                        if event.get("authenticated") is True:
-                            status = "authenticated"
-                            user_info = event.get("user")
-                            current_org = event.get("currentOrg", {}).get("name") if isinstance(event.get("currentOrg"), dict) else None
-                            orgs = [o.get("name") for o in event.get("organizations", []) if isinstance(o, dict) and o.get("name")]
-                        elif event.get("authenticated") is False:
-                            status = "needs_auth"
-                        break
-                status_data = {
-                    "status": status,
-                    "user": user_info,
-                    "current_org": current_org,
-                    "organizations": orgs,
-                }
+                        self._executor.submit(self._refresh_coderabbit_auth_bg)
+                    except Exception:
+                        self._auth_refresh_in_flight = False
+                return {k: v for k, v in cached.items() if k != "checked_at"}
+
+        status_data = self._run_coderabbit_auth_probe()
+        with self._auth_lock:
             self._auth_status_cache = {**status_data, "checked_at": time.monotonic()}
-            return status_data
+        return status_data
 
     def get_annotated_status(self) -> Dict[str, Any]:
-        """Overlays real-time state manager data onto cached PR records for sub-millisecond response."""
-        state = self.state_manager.load_state()
+        """Overlays single-pass SQLite state snapshot onto cached PR records for sub-millisecond response."""
+        snap = self.state_manager.get_dashboard_snapshot()
         config = self.config_manager.load_config()
+        token_configured = bool(self.config_manager.get_github_token())
 
-        is_rate_limited, remaining, reason = self.state_manager.is_rate_limit_active()
-        active_reviews = state.get("active_reviews", {})
-        pr_statuses = state.get("pr_statuses", {})
-        pr_logs = state.get("pr_logs", {})
+        is_rate_limited = snap["rate_limited"]
+        remaining = snap["rate_limit_remaining_seconds"]
+        reason = snap["rate_limit_reason"]
+        active_reviews = snap["active_reviews"]
+        pr_statuses = snap["pr_statuses"]
+        latest_pr_runs = snap["latest_pr_runs"]
+        account_rate_limits = snap["account_rate_limits"]
+        account_metrics = snap["account_metrics"]
         auth_user = self.github_client.get_username()
 
         annotated_prs = []
         cached_list = self.repository_service.get_cached_prs()
-        review_queue = state.get("review_queue", [])
-        queued_keys = {q.get("pr_key") for q in review_queue if isinstance(q, dict)}
+        review_queue_state = self.review_service.get_review_queue()
+        queued_keys = {q.get("pr_key") for q in snap.get("review_queue", []) if isinstance(q, dict)}
+        queued_keys.update(q.get("pr_key") for q in review_queue_state.get("pending", []) if isinstance(q, dict))
 
         for pr in cached_list:
             item = dict(pr)
             key = item["pr_key"]
             status_entry = pr_statuses.get(key, {})
-            logs_for_pr = pr_logs.get(key, [])
-            latest_log = logs_for_pr[0] if (logs_for_pr and isinstance(logs_for_pr, list)) else {}
+            latest_log = latest_pr_runs.get(key, {})
             latest_log_outcome = (latest_log.get("review_outcome") or latest_log.get("status") or "").strip()
 
             has_other_changes = item.get("has_other_changes_requested", False)
@@ -482,14 +536,14 @@ class DashboardBackend:
         ))
 
         return {
-            "config": self.config_manager.get_settings(),
+            "config": self.config_manager.build_settings_dict(config, token_configured),
             "service_enabled": config.get("service_enabled", True),
             "strict_approval": config.get("strict_approval", True),
-            "last_run": state.get("last_run_timestamp", ""),
+            "last_run": snap["last_run_timestamp"],
             "timezone": get_app_timezone_name(),
-            "total_reviews_count": self.state_manager.get_total_reviews_count(),
+            "total_reviews_count": snap["total_reviews_count"],
             "rate_limited": is_rate_limited,
-            "rate_limit_expires_at": state.get("rate_limit_expires_at", 0),
+            "rate_limit_expires_at": snap["rate_limit_expires_at"],
             "rate_limit_remaining_seconds": remaining,
             "rate_limit_reason": reason,
             "repositories": config.get("repositories", []),
@@ -498,7 +552,7 @@ class DashboardBackend:
             "scan_in_progress": self.review_service.scan_in_progress,
             "scan_phase": self.review_service.scan_phase,
             "repository_status": self.repository_service.get_status(),
-            "review_queue": self.review_service.get_review_queue(),
+            "review_queue": review_queue_state,
             "coderabbit_accounts": [
                 {
                     "id": a.get("id"),
@@ -508,13 +562,13 @@ class DashboardBackend:
                     "enabled": a.get("enabled", True),
                     "profile_dir": a.get("profile_dir", ""),
                     "api_key_masked": f"{a.get('api_key')[:4]}...{a.get('api_key')[-4:]}" if a.get("api_key") and len(a.get("api_key")) > 8 else ("configured" if a.get("api_key") else ""),
-                    "rate_limited": self.state_manager.is_account_rate_limited(a.get("id", ""))[0],
-                    "cooldown_remaining": self.state_manager.is_account_rate_limited(a.get("id", ""))[1],
+                    "rate_limited": bool(account_rate_limits.get(a.get("id", ""))),
+                    "cooldown_remaining": (account_rate_limits.get(a.get("id", "")) or {}).get("remaining_seconds", 0),
                     "verified_username": a.get("verified_username"),
                     "verified_email": a.get("verified_email"),
                     "verified_orgs": a.get("verified_orgs", []),
-                    "review_count": self.state_manager.get_account_metrics(a.get("id", "")).get("total_reviews", 0),
-                    "last_active": self.state_manager.get_account_metrics(a.get("id", "")).get("last_reviewed_at", ""),
+                    "review_count": (account_metrics.get(a.get("id", "")) or {}).get("total_reviews", 0),
+                    "last_active": (account_metrics.get(a.get("id", "")) or {}).get("last_reviewed_at", ""),
                 }
                 for a in config.get("coderabbit_accounts", [])
             ],
@@ -524,12 +578,12 @@ class DashboardBackend:
                 "type": "cli",
                 "enabled": True,
                 "is_default": True,
-                "rate_limited": self.state_manager.is_account_rate_limited("default")[0],
-                "cooldown_remaining": self.state_manager.is_account_rate_limited("default")[1],
-                "review_count": self.state_manager.get_account_metrics("default").get("total_reviews", 0),
-                "last_active": self.state_manager.get_account_metrics("default").get("last_reviewed_at", ""),
+                "rate_limited": bool(account_rate_limits.get("default")),
+                "cooldown_remaining": (account_rate_limits.get("default") or {}).get("remaining_seconds", 0),
+                "review_count": (account_metrics.get("default") or {}).get("total_reviews", 0),
+                "last_active": (account_metrics.get("default") or {}).get("last_reviewed_at", ""),
             },
-            "account_rate_limits": self.state_manager.get_account_rate_limits(),
+            "account_rate_limits": account_rate_limits,
         }
 
     def get_pr_details(self, pr_key: str) -> Optional[Dict[str, Any]]:
@@ -597,19 +651,39 @@ class DashboardBackend:
             "latest_log": logs[0] if logs else None
         }
 
-    def get_daily_summary(self, hours: int = 24) -> Dict[str, Any]:
-        """Calculates live daily summary across all open and recently merged PRs and review activity."""
+    def get_daily_summary(self, hours: int = 24, bypass_cache: bool = False) -> Dict[str, Any]:
+        """Calculates live daily summary with short TTL caching keyed by state and repo cache versions."""
+        state_ver = self.state_manager.get_version() if hasattr(self.state_manager, "get_version") else 0
+        repo_ver = self.repository_service.get_cache_version() if hasattr(self.repository_service, "get_cache_version") else 0
+        now_mono = time.monotonic()
+
+        if not bypass_cache:
+            with self._daily_summary_lock:
+                cached = self._daily_summary_cache.get(hours)
+                if (
+                    cached is not None
+                    and (now_mono - cached[0]) < 30.0
+                    and cached[1] == state_ver
+                    and cached[2] == repo_ver
+                ):
+                    return cached[3]
+
         annotated_status = self.get_annotated_status()
-        return generate_daily_summary(
+        summary = generate_daily_summary(
             annotated_status=annotated_status,
             github_client=self.github_client,
             state_manager=self.state_manager,
             hours=hours
         )
+        with self._daily_summary_lock:
+            if len(self._daily_summary_cache) >= 16:
+                self._daily_summary_cache.clear()
+            self._daily_summary_cache[hours] = (time.monotonic(), state_ver, repo_ver, summary)
+        return summary
 
     def create_daily_snapshot(self) -> Dict[str, Any]:
         """Generates a snapshot from live data and stores it in persistent state."""
-        summary = self.get_daily_summary(hours=24)
+        summary = self.get_daily_summary(hours=24, bypass_cache=True)
         snap_id = self.state_manager.save_daily_snapshot(summary)
         summary["id"] = snap_id
         return summary
@@ -640,13 +714,66 @@ backend: Optional[DashboardBackend] = None
 class DashboardRequestHandler(BaseHTTPRequestHandler):
     """HTTP Request Handler implementing REST API and UI serving."""
 
+    def _get_request_header(self, name: str, default: str = "") -> str:
+        headers = getattr(self, "headers", None)
+        if headers is None:
+            return default
+        val = headers.get(name)
+        return str(val) if val is not None else default
+
     def _set_headers(self, status: int = 200, content_type: str = "application/json"):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, If-None-Match")
+        self.send_header("Access-Control-Expose-Headers", "ETag")
         self.end_headers()
+
+    def _send_bytes(
+        self,
+        content: bytes,
+        status: int = 200,
+        content_type: str = "application/json",
+        extra_headers: Optional[Dict[str, str]] = None,
+        enable_etag: bool = False,
+    ) -> None:
+        etag: Optional[str] = None
+        if enable_etag and status == 200:
+            etag = f'W/"{hashlib.blake2b(content, digest_size=8).hexdigest()}"'
+            inm = self._get_request_header("If-None-Match").strip()
+            if inm and (inm == "*" or etag in [t.strip() for t in inm.split(",")]):
+                self.send_response(304)
+                self.send_header("ETag", etag)
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+                self.send_header("Access-Control-Allow-Headers", "Content-Type, If-None-Match")
+                self.send_header("Access-Control-Expose-Headers", "ETag")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+
+        accept_enc = self._get_request_header("Accept-Encoding").lower()
+        use_gzip = ("gzip" in accept_enc) and len(content) >= 1024
+        payload = gzip.compress(content, compresslevel=5) if use_gzip else content
+
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, If-None-Match")
+        self.send_header("Access-Control-Expose-Headers", "ETag")
+        if etag:
+            self.send_header("ETag", etag)
+        if use_gzip:
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Vary", "Accept-Encoding")
+        if extra_headers:
+            for k, v in extra_headers.items():
+                self.send_header(k, v)
+        self.end_headers()
+        self.wfile.write(payload)
 
     def do_OPTIONS(self):
         self._set_headers(204)
@@ -659,10 +786,8 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             # Serve dashboard.html
             html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard.html")
             try:
-                with open(html_path, "rb") as f:
-                    content = f.read()
-                self._set_headers(200, "text/html; charset=utf-8")
-                self.wfile.write(content)
+                content = _read_static_cached(html_path)
+                self._send_bytes(content, 200, "text/html; charset=utf-8", enable_etag=True)
             except Exception as e:
                 self._set_headers(500, "text/plain")
                 self.wfile.write(f"Error loading dashboard: {e}".encode("utf-8"))
@@ -672,10 +797,8 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             # Serve pr_details.html
             html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pr_details.html")
             try:
-                with open(html_path, "rb") as f:
-                    content = f.read()
-                self._set_headers(200, "text/html; charset=utf-8")
-                self.wfile.write(content)
+                content = _read_static_cached(html_path)
+                self._send_bytes(content, 200, "text/html; charset=utf-8", enable_etag=True)
             except Exception as e:
                 self._set_headers(500, "text/plain")
                 self.wfile.write(f"Error loading PR details page: {e}".encode("utf-8"))
@@ -685,19 +808,15 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         if path in ("/favicon.ico", "/assets/favicon.ico"):
             ico_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "favicon.ico")
             if os.path.exists(ico_path):
-                with open(ico_path, "rb") as f:
-                    content = f.read()
-                self._set_headers(200, "image/x-icon")
-                self.wfile.write(content)
+                content = _read_static_cached(ico_path)
+                self._send_bytes(content, 200, "image/x-icon", enable_etag=True)
                 return
 
         if path in ("/favicon.png", "/assets/icon.png"):
             png_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "icon.png")
             if os.path.exists(png_path):
-                with open(png_path, "rb") as f:
-                    content = f.read()
-                self._set_headers(200, "image/png")
-                self.wfile.write(content)
+                content = _read_static_cached(png_path)
+                self._send_bytes(content, 200, "image/png", enable_etag=True)
                 return
 
         if path.startswith("/assets/"):
@@ -705,10 +824,8 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             asset_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", filename)
             if os.path.exists(asset_path):
                 mime = "image/png" if filename.endswith(".png") else "image/x-icon"
-                with open(asset_path, "rb") as f:
-                    content = f.read()
-                self._set_headers(200, mime)
-                self.wfile.write(content)
+                content = _read_static_cached(asset_path)
+                self._send_bytes(content, 200, mime, enable_etag=True)
                 return
 
         if path == "/api/status":
@@ -716,8 +833,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             if query_params.get("force_refresh", [""])[0].lower() in ("true", "1", "yes"):
                 backend.refresh_pr_cache()
             data = backend.get_annotated_status()
-            self._set_headers(200)
-            self.wfile.write(json.dumps(data).encode("utf-8"))
+            self._send_bytes(json.dumps(data).encode("utf-8"), 200, enable_etag=True)
             return
 
         if path in ("/api/pr/details", "/api/pr/logs"):
@@ -732,28 +848,34 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 self._set_headers(404)
                 self.wfile.write(json.dumps({"error": f"Pull request '{pr_key}' not found"}).encode("utf-8"))
                 return
-            self._set_headers(200)
-            self.wfile.write(json.dumps(details).encode("utf-8"))
+            self._send_bytes(json.dumps(details).encode("utf-8"), 200, enable_etag=True)
             return
 
         if path == "/api/config":
             cfg_data = backend.config_manager.get_settings()
-            self._set_headers(200)
-            self.wfile.write(json.dumps(cfg_data).encode("utf-8"))
+            self._send_bytes(json.dumps(cfg_data).encode("utf-8"), 200, enable_etag=True)
             return
 
         if path == "/api/coderabbit-auth":
-            self._set_headers(200)
-            self.wfile.write(json.dumps(backend.get_coderabbit_auth_status()).encode("utf-8"))
+            self._send_bytes(json.dumps(backend.get_coderabbit_auth_status()).encode("utf-8"), 200)
             return
 
         if path == "/api/coderabbit-accounts":
             accounts = backend.config_manager.get_coderabbit_accounts()
+            acc_rate_limits = backend.state_manager.get_account_rate_limits()
+            all_metrics = backend.state_manager.get_all_account_metrics()
+            empty_metrics = {
+                "total_reviews": 0,
+                "approved_count": 0,
+                "commented_count": 0,
+                "error_count": 0,
+                "avg_duration_seconds": 0.0,
+                "last_reviewed_at": "",
+            }
             safe_accounts = []
 
-            # Always include Default (Global CLI) account
-            def_is_rl, def_rem, def_reason = backend.state_manager.is_account_rate_limited("default")
-            def_metrics = backend.state_manager.get_account_metrics("default")
+            def_rl = acc_rate_limits.get("default")
+            def_metrics = all_metrics.get("default", empty_metrics)
             safe_accounts.append({
                 "id": "default",
                 "name": "Default (Global CLI)",
@@ -764,9 +886,9 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 "profile_dir": os.path.expanduser("~/.coderabbit"),
                 "api_key_masked": "",
                 "has_key": False,
-                "rate_limited": def_is_rl,
-                "cooldown_remaining": def_rem,
-                "rate_limit_reason": def_reason,
+                "rate_limited": bool(def_rl),
+                "cooldown_remaining": def_rl.get("remaining_seconds", 0) if def_rl else 0,
+                "rate_limit_reason": def_rl.get("reason", "") if def_rl else "",
                 "review_count": def_metrics.get("total_reviews", 0),
                 "last_active": def_metrics.get("last_reviewed_at", ""),
                 "metrics": def_metrics,
@@ -774,8 +896,8 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
 
             for a in accounts:
                 acc_id = a.get("id", "")
-                is_rl, rem, reason = backend.state_manager.is_account_rate_limited(acc_id)
-                acc_metrics = backend.state_manager.get_account_metrics(acc_id)
+                rl_info = acc_rate_limits.get(acc_id)
+                acc_metrics = all_metrics.get(acc_id, empty_metrics)
                 safe_accounts.append({
                     "id": acc_id,
                     "name": a.get("name"),
@@ -786,9 +908,9 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     "profile_dir": a.get("profile_dir", ""),
                     "api_key_masked": f"{a.get('api_key')[:4]}...{a.get('api_key')[-4:]}" if a.get("api_key") and len(a.get("api_key")) > 8 else ("configured" if a.get("api_key") else ""),
                     "has_key": bool(a.get("api_key")),
-                    "rate_limited": is_rl,
-                    "cooldown_remaining": rem,
-                    "rate_limit_reason": reason,
+                    "rate_limited": bool(rl_info),
+                    "cooldown_remaining": rl_info.get("remaining_seconds", 0) if rl_info else 0,
+                    "rate_limit_reason": rl_info.get("reason", "") if rl_info else "",
                     "verified_username": a.get("verified_username"),
                     "verified_email": a.get("verified_email"),
                     "verified_orgs": a.get("verified_orgs", []),
@@ -796,8 +918,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     "last_active": acc_metrics.get("last_reviewed_at", ""),
                     "metrics": acc_metrics,
                 })
-            self._set_headers(200)
-            self.wfile.write(json.dumps(safe_accounts).encode("utf-8"))
+            self._send_bytes(json.dumps(safe_accounts).encode("utf-8"), 200, enable_etag=True)
             return
 
         if path == "/api/coderabbit-accounts/history":
@@ -805,12 +926,11 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             acc_id = query_params.get("account_id", query_params.get("id", ["default"]))[0].strip() or "default"
             logs = backend.state_manager.get_account_logs(acc_id)
             metrics = backend.state_manager.get_account_metrics(acc_id)
-            self._set_headers(200)
-            self.wfile.write(json.dumps({
+            self._send_bytes(json.dumps({
                 "account_id": acc_id,
                 "metrics": metrics,
                 "logs": logs
-            }).encode("utf-8"))
+            }).encode("utf-8"), 200)
             return
 
         if path == "/api/review-history":
@@ -847,25 +967,21 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 search=search,
                 time_range=time_range
             )
-            self._set_headers(200)
-            self.wfile.write(json.dumps(history_data).encode("utf-8"))
+            self._send_bytes(json.dumps(history_data).encode("utf-8"), 200, enable_etag=True)
             return
 
 
         if path == "/api/repos":
             repos = backend.repository_service.get_repositories()
-            self._set_headers(200)
-            self.wfile.write(json.dumps(repos).encode("utf-8"))
+            self._send_bytes(json.dumps(repos).encode("utf-8"), 200, enable_etag=True)
             return
 
         if path.startswith("/reports/"):
             filename = os.path.basename(path)
             report_path = os.path.join(DEFAULT_REVIEWS_DIR, filename)
             if os.path.exists(report_path):
-                with open(report_path, "rb") as f:
-                    content = f.read()
-                self._set_headers(200, "text/html; charset=utf-8")
-                self.wfile.write(content)
+                content = _read_static_cached(report_path)
+                self._send_bytes(content, 200, "text/html; charset=utf-8", enable_etag=True)
                 return
             else:
                 self._set_headers(404, "text/plain")
@@ -881,33 +997,19 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 except (ValueError, TypeError):
                     hours = 24
             summary = backend.get_daily_summary(hours=hours)
-            self._set_headers(200)
-            self.wfile.write(json.dumps(summary).encode("utf-8"))
+            self._send_bytes(json.dumps(summary).encode("utf-8"), 200)
             return
 
         if path == "/api/daily-summary/snapshots":
-            snapshots = backend.state_manager.get_daily_snapshots()
-            safe_snaps = []
-            for s in snapshots:
-                safe_snaps.append({
-                    "id": s.get("id"),
-                    "date": s.get("date"),
-                    "created_at": s.get("created_at"),
-                    "created_at_friendly": s.get("created_at_friendly"),
-                    "metrics": s.get("metrics", {}),
-                    "open_prs_count": len(s.get("open_prs", [])),
-                    "merged_prs_count": len(s.get("merged_prs", [])),
-                })
-            self._set_headers(200)
-            self.wfile.write(json.dumps(safe_snaps).encode("utf-8"))
+            safe_snaps = backend.state_manager.get_daily_snapshot_summaries()
+            self._send_bytes(json.dumps(safe_snaps).encode("utf-8"), 200)
             return
 
         if path.startswith("/api/daily-summary/snapshots/"):
             snap_id = path.replace("/api/daily-summary/snapshots/", "").strip()
             snap = backend.state_manager.get_daily_snapshot(snap_id)
             if snap:
-                self._set_headers(200)
-                self.wfile.write(json.dumps(snap).encode("utf-8"))
+                self._send_bytes(json.dumps(snap).encode("utf-8"), 200)
             else:
                 self._set_headers(404)
                 self.wfile.write(json.dumps({"error": f"Snapshot '{snap_id}' not found"}).encode("utf-8"))
@@ -930,23 +1032,21 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             date_tag = data.get("date", now_app_tz().strftime("%Y-%m-%d"))
             if fmt == "html":
                 rendered = format_html_summary(data).encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Disposition", f'attachment; filename="daily-summary-{date_tag}.html"')
-                self.send_header("Content-Length", str(len(rendered)))
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.end_headers()
-                self.wfile.write(rendered)
+                self._send_bytes(
+                    rendered,
+                    200,
+                    "text/html; charset=utf-8",
+                    extra_headers={"Content-Disposition": f'attachment; filename="daily-summary-{date_tag}.html"'},
+                )
                 return
             else:
                 rendered = format_markdown_summary(data, group=group).encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "text/markdown; charset=utf-8")
-                self.send_header("Content-Disposition", f'attachment; filename="daily-summary-{date_tag}.md"')
-                self.send_header("Content-Length", str(len(rendered)))
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.end_headers()
-                self.wfile.write(rendered)
+                self._send_bytes(
+                    rendered,
+                    200,
+                    "text/markdown; charset=utf-8",
+                    extra_headers={"Content-Disposition": f'attachment; filename="daily-summary-{date_tag}.md"'},
+                )
                 return
 
         self._set_headers(404, "text/plain")

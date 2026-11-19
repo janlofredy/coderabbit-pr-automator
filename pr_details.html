@@ -693,6 +693,7 @@
         let currentPrData = null;
         let selectedRunIndex = 0;
         let activeLogTab = 'stdout';
+        let lastDetailsEtag = null;
 
         function showToast(message, type = 'info') {
             const container = document.getElementById('toast-container');
@@ -755,14 +756,17 @@
             return String(text).replace(/[&<>"']/g, m => map[m]);
         }
 
-        async function fetchPRDetails() {
+        async function fetchPRDetails(force = false) {
+            if (!force && document.hidden) return;
             if (!currentPrKey) {
                 document.getElementById('pr-title').textContent = 'Error: No pr_key specified';
                 return;
             }
 
             try {
-                const res = await fetch(`/api/pr/details?pr_key=${encodeURIComponent(currentPrKey)}`);
+                const headers = (!force && lastDetailsEtag) ? { 'If-None-Match': lastDetailsEtag } : {};
+                const res = await fetch(`/api/pr/details?pr_key=${encodeURIComponent(currentPrKey)}`, { headers });
+                if (res.status === 304) return;
                 if (!res.ok) {
                     if (res.status === 404) {
                         document.getElementById('pr-title').textContent = `Pull Request ${currentPrKey} Not Found`;
@@ -770,6 +774,8 @@
                     }
                     throw new Error(`HTTP ${res.status}`);
                 }
+                const etag = res.headers.get('ETag');
+                if (etag) lastDetailsEtag = etag;
                 const data = await res.json();
                 currentPrData = data;
                 renderDetailsView();
@@ -1115,7 +1121,7 @@
                 if (res.ok) {
                     showToast(`⚡ Review triggered for ${currentPrKey}${force ? ' (forced)' : ''}! Scanning in progress...`, 'success');
                     // Refresh details after a short interval
-                    setTimeout(fetchPRDetails, 1500);
+                    setTimeout(() => fetchPRDetails(true), 1500);
                 } else {
                     showToast('Failed to trigger review pass.', 'error');
                 }
@@ -1130,9 +1136,12 @@
             }
         }
 
-        // Initialize and auto-refresh every 5s
-        fetchPRDetails();
-        setInterval(fetchPRDetails, 5000);
+        // Initialize and auto-refresh every 5s when tab is visible
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) fetchPRDetails(true);
+        });
+        fetchPRDetails(true);
+        setInterval(() => fetchPRDetails(false), 5000);
     </script>
 </body>
 </html>

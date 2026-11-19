@@ -7,6 +7,7 @@ Provides Markdown and HTML formatting for sharing and downloads.
 
 import html
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional
 from pr_stacks import identify_pr_stacks
@@ -161,6 +162,7 @@ def generate_daily_summary(
     merged_prs: List[Dict[str, Any]] = []
     repositories = annotated_status.get("repositories", [])
     if github_client and hasattr(github_client, "list_recently_merged_prs"):
+        repo_targets = []
         for repo_info in repositories:
             if not repo_info.get("enabled", True):
                 continue
@@ -169,9 +171,13 @@ def generate_daily_summary(
                 continue
             try:
                 owner, repo_name = full_name.split("/", 1)
+                repo_targets.append((full_name, owner, repo_name))
             except ValueError:
                 continue
 
+        def _fetch_repo_merged(target):
+            full_name, owner, repo_name = target
+            entries: List[Dict[str, Any]] = []
             try:
                 repo_merged = github_client.list_recently_merged_prs(owner, repo_name, since_timestamp=cutoff_iso)
                 for m_pr in repo_merged:
@@ -184,7 +190,7 @@ def generate_daily_summary(
                     user_login = (m_pr.get("user") or {}).get("login", "unknown")
                     base_ref = (m_pr.get("base") or {}).get("ref", "main")
 
-                    merged_prs.append({
+                    entries.append({
                         "pr_key": f"{full_name}#{num}",
                         "repo": full_name,
                         "number": num,
@@ -205,6 +211,14 @@ def generate_daily_summary(
                     })
             except Exception as e:
                 logger.warning("Could not fetch merged PRs for %s: %s", full_name, e)
+            return entries
+
+        if len(repo_targets) > 1:
+            with ThreadPoolExecutor(max_workers=min(8, len(repo_targets))) as pool:
+                for batch in pool.map(_fetch_repo_merged, repo_targets):
+                    merged_prs.extend(batch)
+        elif len(repo_targets) == 1:
+            merged_prs.extend(_fetch_repo_merged(repo_targets[0]))
 
     # Sort open PRs and merged PRs
     open_prs.sort(key=lambda p: p.get("updated_at", ""), reverse=True)

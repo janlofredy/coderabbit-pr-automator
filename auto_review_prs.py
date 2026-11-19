@@ -2,7 +2,10 @@ import os
 import re
 import json
 import time
+import uuid
+import shutil
 import subprocess
+import threading
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional, Tuple
@@ -37,8 +40,28 @@ class AutoReviewEngine:
         self.github_client = github_client or GitHubClient()
         self.reviews_dir = reviews_dir
         self.cli_timeout = cli_timeout
-        self.last_checkout_error = ""
+        self._repo_locks_guard = threading.Lock()
+        self._repo_locks: Dict[str, threading.Lock] = {}
+        self._tls = threading.local()
+        self._tls.last_checkout_error = ""
         os.makedirs(self.reviews_dir, exist_ok=True)
+
+    @property
+    def last_checkout_error(self) -> str:
+        return getattr(self._tls, "last_checkout_error", "")
+
+    @last_checkout_error.setter
+    def last_checkout_error(self, value: str) -> None:
+        self._tls.last_checkout_error = value
+
+    def _get_repo_lock(self, repo_path: str) -> threading.Lock:
+        key = os.path.abspath(repo_path)
+        with self._repo_locks_guard:
+            lock = self._repo_locks.get(key)
+            if lock is None:
+                lock = threading.Lock()
+                self._repo_locks[key] = lock
+            return lock
 
     def run_git(self, repo_dir: str, args: List[str], check: bool = True) -> subprocess.CompletedProcess:
         """Executes a git command inside the target repo directory."""
@@ -53,35 +76,49 @@ class AutoReviewEngine:
         )
 
     def prepare_repo(self, full_name: str, repo_path: str) -> bool:
-        """Clones or updates the local git clone for the repository."""
-        os.makedirs(os.path.dirname(os.path.abspath(repo_path)), exist_ok=True)
-        token = self.github_client.token
+        """Clones (using partial blobless clone when supported) or updates the remote URL of the local git repo."""
+        with self._get_repo_lock(repo_path):
+            os.makedirs(os.path.dirname(os.path.abspath(repo_path)), exist_ok=True)
+            token = self.github_client.token
 
-        if token:
-            clone_url = f"https://x-access-token:{token}@github.com/{full_name}.git"
-        else:
-            clone_url = f"https://github.com/{full_name}.git"
+            if token:
+                clone_url = f"https://x-access-token:{token}@github.com/{full_name}.git"
+            else:
+                clone_url = f"https://github.com/{full_name}.git"
 
-        if not os.path.exists(os.path.join(repo_path, ".git")):
-            logger.info("Cloning %s into %s...", full_name, repo_path)
-            res = subprocess.run(
-                ["git", "clone", clone_url, repo_path],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-            if res.returncode != 0:
-                logger.error("Failed to clone %s: %s", full_name, res.stderr)
-                return False
-        else:
-            # Update remote URL and fetch latest
-            subprocess.run(["git", "remote", "set-url", "origin", clone_url], cwd=repo_path, capture_output=True)
-            res = subprocess.run(["git", "fetch", "--all", "--prune"], cwd=repo_path, capture_output=True, text=True)
-            if res.returncode != 0:
-                logger.error("Failed to fetch %s: %s", full_name, res.stderr)
-                return False
+            if not os.path.exists(os.path.join(repo_path, ".git")):
+                logger.info("Cloning %s into %s...", full_name, repo_path)
+                res = subprocess.run(
+                    ["git", "clone", "--filter=blob:none", clone_url, repo_path],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                if res.returncode != 0:
+                    shutil.rmtree(repo_path, ignore_errors=True)
+                    res = subprocess.run(
+                        ["git", "clone", clone_url, repo_path],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True
+                    )
+                if res.returncode != 0:
+                    logger.error("Failed to clone %s: %s", full_name, res.stderr)
+                    return False
+            else:
+                # Update remote URL; checkout_pr / prepare_pr_worktree fetches exact target refs
+                res = subprocess.run(
+                    ["git", "remote", "set-url", "origin", clone_url],
+                    cwd=repo_path,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                if res.returncode != 0:
+                    logger.error("Failed to configure origin remote for %s: %s", full_name, res.stderr)
+                    return False
 
-        return True
+            return True
 
     def checkout_pr(self, repo_path: str, pr_number: int, base_ref: str) -> bool:
         """Fetches the PR head without updating a possibly checked-out local branch."""
@@ -90,8 +127,8 @@ class AutoReviewEngine:
         try:
             # Keep both fetches on remote-tracking refs. Updating refs/heads/pr-N
             # fails when a previous review left that branch checked out.
-            self.run_git(repo_path, ["fetch", "origin", f"{base_ref}:refs/remotes/origin/{base_ref}", "--force"])
-            self.run_git(repo_path, ["fetch", "origin", f"pull/{pr_number}/head:{pr_ref}", "--force"])
+            self.run_git(repo_path, ["fetch", "origin", "--no-tags", f"{base_ref}:refs/remotes/origin/{base_ref}", "--force"])
+            self.run_git(repo_path, ["fetch", "origin", "--no-tags", f"pull/{pr_number}/head:{pr_ref}", "--force"])
 
             current_head = self.run_git(repo_path, ["rev-parse", "HEAD"]).stdout.strip()
             fetched_head = self.run_git(repo_path, ["rev-parse", pr_ref]).stdout.strip()
@@ -107,6 +144,40 @@ class AutoReviewEngine:
             self.last_checkout_error = f"git {' '.join(e.cmd[1:])}: {detail}"
             logger.error("Git error checking out PR #%s in %s: %s", pr_number, repo_path, self.last_checkout_error)
             return False
+
+    def prepare_pr_worktree(self, repo_path: str, pr_number: int, base_ref: str) -> Optional[str]:
+        """Fetches PR refs and checks out an isolated git worktree for concurrent reviews."""
+        self.last_checkout_error = ""
+        pr_ref = f"refs/remotes/origin/pr-{pr_number}"
+        abs_repo = os.path.abspath(repo_path)
+        worktrees_root = os.path.join(os.path.dirname(abs_repo), ".worktrees")
+        wt_path = os.path.join(worktrees_root, f"{os.path.basename(abs_repo)}_pr{pr_number}_{uuid.uuid4().hex[:8]}")
+
+        with self._get_repo_lock(repo_path):
+            try:
+                self.run_git(repo_path, ["fetch", "origin", "--no-tags", f"{base_ref}:refs/remotes/origin/{base_ref}", "--force"])
+                self.run_git(repo_path, ["fetch", "origin", "--no-tags", f"pull/{pr_number}/head:{pr_ref}", "--force"])
+                os.makedirs(worktrees_root, exist_ok=True)
+                self.run_git(repo_path, ["worktree", "add", "--detach", "--force", wt_path, pr_ref])
+                return wt_path
+            except subprocess.CalledProcessError as e:
+                detail = (e.stderr or e.stdout or str(e)).strip()
+                self.last_checkout_error = f"git {' '.join(e.cmd[1:])}: {detail}"
+                logger.error("Git error creating worktree for PR #%s in %s: %s", pr_number, repo_path, self.last_checkout_error)
+                shutil.rmtree(wt_path, ignore_errors=True)
+                return None
+
+    def cleanup_pr_worktree(self, repo_path: str, wt_path: Optional[str]) -> None:
+        """Removes a temporary PR review worktree cleanly."""
+        if not wt_path:
+            return
+        with self._get_repo_lock(repo_path):
+            try:
+                self.run_git(repo_path, ["worktree", "remove", "--force", wt_path], check=False)
+                self.run_git(repo_path, ["worktree", "prune"], check=False)
+            except Exception:
+                pass
+            shutil.rmtree(wt_path, ignore_errors=True)
 
     def count_changed_files(self, repo_path: str, base_ref: str, pr_number: int) -> int:
         """Counts modified files between base and PR branch."""
@@ -535,7 +606,14 @@ class AutoReviewEngine:
 
         return filename
 
-    def review_single_pr(self, repo_info: Dict[str, Any], pr: Dict[str, Any], force: bool = False, account: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def review_single_pr(
+        self,
+        repo_info: Dict[str, Any],
+        pr: Dict[str, Any],
+        force: bool = False,
+        account: Optional[Dict[str, Any]] = None,
+        use_worktree: bool = False,
+    ) -> Dict[str, Any]:
         """
         Executes the full review workflow for a single pull request.
         """
@@ -628,11 +706,20 @@ class AutoReviewEngine:
             self.state_manager.record_pr_status(pr_key, status_data)
             return status_data
 
-        # Checkout PR
+        # Checkout PR (in isolated worktree when running parallel reviews)
         self.state_manager.set_pr_reviewing(
             pr_key, True, attempt, "CHECKING_OUT_PR", f"Checking out pull request #{pr_number}"
         )
-        if not self.checkout_pr(repo_path, pr_number, base_ref):
+        worktree_path: Optional[str] = None
+        if use_worktree:
+            worktree_path = self.prepare_pr_worktree(repo_path, pr_number, base_ref)
+            checkout_ok = worktree_path is not None
+            workdir = worktree_path or repo_path
+        else:
+            checkout_ok = self.checkout_pr(repo_path, pr_number, base_ref)
+            workdir = repo_path
+
+        if not checkout_ok:
             self.state_manager.set_pr_reviewing(pr_key, False)
             checkout_error = self.last_checkout_error or "Git checkout failed; see application logs for details."
             error_message = f"Failed to checkout PR branch: {checkout_error}"
@@ -650,11 +737,57 @@ class AutoReviewEngine:
             self.state_manager.record_pr_status(pr_key, status_data)
             return status_data
 
+        try:
+            return self._run_pr_review_in_workdir(
+                workdir=workdir,
+                full_name=full_name,
+                owner=owner,
+                repo_name=repo_name,
+                pr=pr,
+                pr_number=pr_number,
+                pr_key=pr_key,
+                head_sha=head_sha,
+                base_ref=base_ref,
+                head_ref=head_ref,
+                pr_author=pr_author,
+                auth_user=auth_user,
+                is_own_pr=is_own_pr,
+                max_files_limit=max_files_limit,
+                auto_approve=auto_approve,
+                strict_approval=strict_approval,
+                attempt=attempt,
+                account=account,
+            )
+        finally:
+            if use_worktree and worktree_path:
+                self.cleanup_pr_worktree(repo_path, worktree_path)
+
+    def _run_pr_review_in_workdir(
+        self,
+        workdir: str,
+        full_name: str,
+        owner: str,
+        repo_name: str,
+        pr: Dict[str, Any],
+        pr_number: int,
+        pr_key: str,
+        head_sha: str,
+        base_ref: str,
+        head_ref: str,
+        pr_author: str,
+        auth_user: str,
+        is_own_pr: bool,
+        max_files_limit: int,
+        auto_approve: bool,
+        strict_approval: bool,
+        attempt: int,
+        account: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
         # 100-File Free-Tier Ceiling Guard
         self.state_manager.set_pr_reviewing(
             pr_key, True, attempt, "CHECKING_REVIEW_LIMITS", "Checking changed-file limits"
         )
-        changed_files_count = self.count_changed_files(repo_path, base_ref, pr_number)
+        changed_files_count = self.count_changed_files(workdir, base_ref, pr_number)
         api_files_count = pr.get("changed_files", 0)
         file_count = max(changed_files_count, api_files_count)
 
@@ -710,7 +843,7 @@ class AutoReviewEngine:
             pr_key, True, attempt, "RUNNING_CODERABBIT", f"CodeRabbit ({account_name}) is analyzing the pull request"
         )
         start_time = time.time()
-        retcode, stdout, stderr = self.execute_coderabbit_cli(repo_path, base_ref, account=account)
+        retcode, stdout, stderr = self.execute_coderabbit_cli(workdir, base_ref, account=account)
         elapsed = time.time() - start_time
         combined_output = f"{stdout}\n{stderr}"
 
@@ -889,7 +1022,7 @@ class AutoReviewEngine:
         summary_text = parsed.get("summary", "Review completed successfully.")
 
         # Check line offsets against diff
-        valid_lines_by_file = self.get_valid_diff_lines(repo_path, base_ref, pr_number)
+        valid_lines_by_file = self.get_valid_diff_lines(workdir, base_ref, pr_number)
         line_comments = []
         findings_without_file = 0
         findings_without_changed_lines = 0
